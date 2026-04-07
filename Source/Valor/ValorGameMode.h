@@ -1,19 +1,14 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "ValorGameMode.generated.h"
 
-UCLASS(minimalapi)
-class AValorGameMode : public AGameModeBase
+UCLASS()
+class VALOR_API AValorGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
 
 public:
 	AValorGameMode();
 };
-
-
-

@@ -1,0 +1,120 @@
+# Project: Valorant Clone (Unreal Engine C++ Only)
+
+## Core Principles
+- Use C++ only (Blueprint is allowed only for UI or testing)
+- Do NOT modify Unreal Engine source code
+- This project is multiplayer-first (Dedicated Server architecture)
+- This is a portfolio project → production-quality required
+
+## Key Focus
+- Network architecture (HIGH PRIORITY)
+- Gunplay mechanics (HIGH PRIORITY)
+
+---
+
+## Networking Rules (CRITICAL)
+
+- Server is authoritative
+- Client only sends input (never trusted)
+- All gameplay logic runs on server
+
+### Movement
+- Client Prediction required
+- Server Reconciliation required
+
+### Shooting
+- Server-side hit validation
+- Lag Compensation required
+
+### Replication
+- Minimize replication cost
+- Use relevancy (OwnerOnly, NetCullDistance)
+- Avoid unnecessary RPC calls
+
+---
+
+## Gunplay Rules
+
+- Hitscan weapon first (no projectile initially)
+- Fire rate must be server-validated
+- Recoil & spread must be deterministic
+- Bullet logic must NOT trust client
+
+---
+
+## GAS (Gameplay Ability System) Rules
+
+- GAS must be used for all abilities (skills, buffs, debuffs)
+- Do NOT implement custom ability system
+
+### GAS Structure
+- Use AbilitySystemComponent
+- Use AttributeSet for player stats (HP, Shield, etc.)
+- Abilities must be server-driven
+
+### GAS Flow
+1. Input → Client
+2. Request → Server RPC
+3. Server activates Ability
+4. State replicated to clients
+
+---
+
+## Code Quality Rules
+
+- Every class must have a clear responsibility (SRP)
+- Prefer composition over inheritance
+- Use Unreal macros correctly (UPROPERTY, UFUNCTION)
+
+---
+
+## Documentation Rules (VERY IMPORTANT)
+
+All code must include:
+
+1. Why this design is used
+2. How networking is handled
+3. Trade-offs
+
+---
+
+## Blog Rules (Velog)
+
+When requested:
+
+- Use markdown (#, ##)
+- End sentences with "~다"
+- Structure:
+
+1. Problem
+2. Why naive approach fails
+3. Design
+4. Multiplayer considerations
+5. Implementation
+6. Result
+
+---
+
+## Security Rules (Anti-Cheat Mindset)
+
+- Never trust client data
+- Validate all gameplay inputs
+- Detect abnormal behavior (fire rate, movement speed)
+
+---
+
+## Performance Rules
+
+- Avoid Tick when possible
+- Use event-driven design
+- Optimize replication size
+
+
+[Language Rules - Strict]
+- All explanations must be written in Korean.
+- All inline code comments must be written in Korean.
+- Never write explanations in English.
+- Use English only for Unreal Engine keywords, class names, and API names.
+- When using technical terms (e.g., RPC, Replication), always include a short Korean explanation.
+- Comments must explain "why", not just "what".
+- Always explain networking logic in Korean in detail.
