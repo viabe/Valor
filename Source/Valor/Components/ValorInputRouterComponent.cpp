@@ -14,7 +14,7 @@ UValorInputRouterComponent::UValorInputRouterComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponent, APlayerController* PlayerController, UInputMappingContext* MappingContext, UInputAction* MoveAction, UInputAction* LookAction, UInputAction* JumpAction, UInputAction* WalkAction, UInputAction* CrouchAction)
+void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponent, APlayerController* PlayerController, UInputMappingContext* MappingContext, UInputAction* MoveAction, UInputAction* LookAction, UInputAction* JumpAction, UInputAction* WalkAction, UInputAction* CrouchAction, UInputAction* FireAction, UInputAction* ReloadAction, UInputAction* ADSAction, UInputAction* InteractAction)
 {
 	AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner());
 	if (!OwnerCharacter || !PlayerInputComponent || !PlayerController || !PlayerController->IsLocalController())
@@ -59,6 +59,30 @@ void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponen
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleCrouchStarted);
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleCrouchCompleted);
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Canceled, this, &UValorInputRouterComponent::HandleCrouchCompleted);
+	}
+
+	if (FireAction)
+	{
+		EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleFireStarted);
+		EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleFireCompleted);
+		EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Canceled, this, &UValorInputRouterComponent::HandleFireCompleted);
+	}
+
+	if (ReloadAction)
+	{
+		EnhancedInputComponent->BindAction(ReloadAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleReloadStarted);
+	}
+
+	if (ADSAction)
+	{
+		EnhancedInputComponent->BindAction(ADSAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleADSStarted);
+		EnhancedInputComponent->BindAction(ADSAction, ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleADSCompleted);
+		EnhancedInputComponent->BindAction(ADSAction, ETriggerEvent::Canceled, this, &UValorInputRouterComponent::HandleADSCompleted);
+	}
+
+	if (InteractAction)
+	{
+		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleInteractStarted);
 	}
 
 	if (MoveAction)
@@ -135,5 +159,53 @@ void UValorInputRouterComponent::HandleCrouchCompleted(const FInputActionValue& 
 	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
 	{
 		OwnerCharacter->HandleCrouchInputReleased();
+	}
+}
+
+void UValorInputRouterComponent::HandleFireStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleFireInputPressed();
+	}
+}
+
+void UValorInputRouterComponent::HandleFireCompleted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleFireInputReleased();
+	}
+}
+
+void UValorInputRouterComponent::HandleReloadStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleReloadInputPressed();
+	}
+}
+
+void UValorInputRouterComponent::HandleADSStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleADSInputPressed();
+	}
+}
+
+void UValorInputRouterComponent::HandleADSCompleted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleADSInputReleased();
+	}
+}
+
+void UValorInputRouterComponent::HandleInteractStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleInteractInputPressed();
 	}
 }

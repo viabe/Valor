@@ -1,21 +1,27 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AbilitySystemInterface.h"
 #include "Components/ValorCharacterStateComponent.h"
 #include "GameFramework/Character.h"
 #include "Interfaces/ValorWeaponOwnerInterface.h"
 #include "ValorCharacter.generated.h"
 
+class UAbilitySystemComponent;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
+class UValorAbilitySystemComponent;
+class UValorCombatAttributeSet;
 class UValorCameraComponent;
 class UValorCharacterStateComponent;
+class UValorCombatComponent;
 class UValorInputRouterComponent;
+class UValorLagCompensationComponent;
 
 UCLASS(config=Game)
-class VALOR_API AValorCharacter : public ACharacter, public IValorWeaponOwnerInterface
+class VALOR_API AValorCharacter : public ACharacter, public IValorWeaponOwnerInterface, public IAbilitySystemInterface
 {
 	GENERATED_BODY()
 
@@ -49,6 +55,19 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* CrouchAction;
 
+	// 무기 입력은 Character가 소유하되, 실제 로직은 CombatComponent에 위임한다.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* FireAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* ReloadAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* ADSAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* InteractAction;
+
 	// 상태 복제와 상태 전이를 담당하는 전용 컴포넌트다.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
 	UValorCharacterStateComponent* CharacterStateComponent;
@@ -56,6 +75,21 @@ private:
 	// 카메라 설정과 로컬 1인칭 프레젠테이션을 담당하는 전용 컴포넌트다.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
 	UValorCameraComponent* CameraLogicComponent;
+
+	// 전투 상태와 무기 상호작용은 Character에서 분리해 멀티플레이 복제 비용을 제어한다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
+	UValorCombatComponent* CombatComponent;
+
+	// 사격 Ability와 체력/실드 Attribute는 GAS 표준 경로를 사용한다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
+	UValorAbilitySystemComponent* AbilitySystemComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
+	UValorCombatAttributeSet* CombatAttributeSet;
+
+	// 랙 보상은 서버가 저장한 과거 프레임으로 히트 판정을 되돌리는 전용 컴포넌트가 맡는다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
+	UValorLagCompensationComponent* LagCompensationComponent;
 
 	// 입력 바인딩을 Character 외부로 분리해 이후 액션 확장을 쉽게 만든다.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
@@ -76,6 +110,10 @@ private:
 	// 앉아 있는 동안 적용할 속도다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Movement", meta = (AllowPrivateAccess = "true"))
 	float CrouchSpeed = 180.0f;
+
+	// 캐릭터별 애니메이션 오버라이드 계층이 공통 AnimInstance 위에서 분기할 수 있도록 남겨둔 프로필 이름이다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Animation", meta = (AllowPrivateAccess = "true"))
+	FName AnimationProfileName = TEXT("Default");
 
 public:
 	AValorCharacter();
@@ -109,18 +147,35 @@ public:
 	// 입력 라우터가 전달한 앉기 해제 입력을 처리한다.
 	void HandleCrouchInputReleased();
 
+	void HandleFireInputPressed();
+	void HandleFireInputReleased();
+	void HandleReloadInputPressed();
+	void HandleADSInputPressed();
+	void HandleADSInputReleased();
+	void HandleInteractInputPressed();
+
 	// 서버가 마지막으로 승인한 이동 입력값을 조회한다.
 	FVector2D GetLastValidatedMoveInput() const { return LastValidatedMoveInput; }
 	bool IsWalkInputActive() const { return bWantsToWalk; }
+	FName GetAnimationProfileName() const { return AnimationProfileName; }
 
 	// IValorWeaponOwnerInterface
 	virtual USceneComponent* GetWeaponAttachComponent() const override;
 	virtual FName GetWeaponAttachSocketName() const override;
 	virtual void GetWeaponViewPoint(FVector& OutLocation, FRotator& OutRotation) const override;
 
+	// IAbilitySystemInterface
+	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
 	FORCEINLINE UValorCharacterStateComponent* GetCharacterStateComponent() const { return CharacterStateComponent; }
+	FORCEINLINE UValorCameraComponent* GetCameraLogicComponent() const { return CameraLogicComponent; }
+	FORCEINLINE UValorCombatComponent* GetCombatComponent() const { return CombatComponent; }
+	FORCEINLINE UValorLagCompensationComponent* GetLagCompensationComponent() const { return LagCompensationComponent; }
+	FORCEINLINE const UValorCombatAttributeSet* GetCombatAttributeSet() const { return CombatAttributeSet; }
+
+	bool IsAlive() const;
 
 protected:
 	// 이동 입력은 클라이언트 예측을 유지하되, 서버에도 검증용으로 전달한다.
@@ -160,6 +215,8 @@ protected:
 	void MulticastHandleMovementStateChanged(EValorMovementState NewMovementState);
 
 private:
+	void BuildDefaultInputMapping();
+	void InitializeAbilityActorInfo();
 	void RefreshFirstPersonPresentation();
 	void ApplyMoveInput(const FVector2D& SanitizedMoveInput);
 	FVector2D SanitizeMoveInput(const FVector2D& RawMoveInput) const;

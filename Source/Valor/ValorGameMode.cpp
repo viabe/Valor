@@ -1,16 +1,11 @@
 #include "ValorGameMode.h"
 
+#include "ValorCharacter.h"
 #include "Player/ValorPlayerController.h"
-#include "UObject/ConstructorHelpers.h"
 
 AValorGameMode::AValorGameMode()
 {
-	// 블루프린트 기본 Pawn은 유지해 기존 메시/입력 자산 연결을 최대한 보존한다.
-	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnBPClass(TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter"));
-	if (PlayerPawnBPClass.Class != nullptr)
-	{
-		DefaultPawnClass = PlayerPawnBPClass.Class;
-	}
-
+	// 총기/전투 시스템은 AValorCharacter에 직접 연결되어 있으므로 기본 Pawn도 C++ 캐릭터를 사용한다.
+	DefaultPawnClass = AValorCharacter::StaticClass();
 	PlayerControllerClass = AValorPlayerController::StaticClass();
 }

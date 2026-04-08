@@ -6,10 +6,23 @@
 
 UValorCameraComponent::UValorCameraComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
 }
 
-void UValorCameraComponent::ConfigureFirstPersonView(ACharacter* OwningCharacter, USpringArmComponent* CameraBoom, UCameraComponent* FollowCamera) const
+void UValorCameraComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!CachedFollowCamera.IsValid())
+	{
+		return;
+	}
+
+	const float NextFOV = FMath::FInterpTo(CachedFollowCamera->FieldOfView, CurrentTargetFOV, DeltaTime, ADSInterpSpeed);
+	CachedFollowCamera->SetFieldOfView(NextFOV);
+}
+
+void UValorCameraComponent::ConfigureFirstPersonView(ACharacter* OwningCharacter, USpringArmComponent* CameraBoom, UCameraComponent* FollowCamera)
 {
 	if (!OwningCharacter || !CameraBoom || !FollowCamera)
 	{
@@ -21,11 +34,13 @@ void UValorCameraComponent::ConfigureFirstPersonView(ACharacter* OwningCharacter
 	CameraBoom->SocketOffset = CameraSocketOffset;
 	CameraBoom->bUsePawnControlRotation = true;
 
-	FollowCamera->FieldOfView = TargetFOV;
+	CachedFollowCamera = FollowCamera;
+	CurrentTargetFOV = HipFireFOV;
+	FollowCamera->FieldOfView = HipFireFOV;
 	FollowCamera->bUsePawnControlRotation = false;
 }
 
-void UValorCameraComponent::RefreshLocalPresentation(ACharacter* OwningCharacter, bool bIsLocallyControlled) const
+void UValorCameraComponent::RefreshLocalPresentation(ACharacter* OwningCharacter, bool bIsLocallyControlled)
 {
 	if (!OwningCharacter || !OwningCharacter->GetMesh())
 	{
@@ -34,4 +49,11 @@ void UValorCameraComponent::RefreshLocalPresentation(ACharacter* OwningCharacter
 
 	// 로컬 플레이어는 자기 자신의 풀바디 메시를 숨겨 카메라 클리핑을 방지한다.
 	OwningCharacter->GetMesh()->SetOwnerNoSee(bIsLocallyControlled);
+}
+
+void UValorCameraComponent::SetADSState(bool bNewADS, float ADSFieldOfView, float InterpSpeed)
+{
+	bIsADSActive = bNewADS;
+	ADSInterpSpeed = InterpSpeed > 0.0f ? InterpSpeed : 18.0f;
+	CurrentTargetFOV = bIsADSActive ? ADSFieldOfView : HipFireFOV;
 }

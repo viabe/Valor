@@ -1,9 +1,18 @@
 #include "ValorCharacter.h"
 
+#include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
+#include "AbilitySystem/ValorAbilitySystemComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/ValorCombatComponent.h"
 #include "Components/ValorCameraComponent.h"
 #include "Components/ValorInputRouterComponent.h"
+#include "Components/ValorLagCompensationComponent.h"
+#include "EnhancedActionKeyMapping.h"
+#include "EnhancedInputComponent.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "InputModifiers.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -14,6 +23,17 @@ AValorCharacter::AValorCharacter()
 	bReplicates = true;
 	NetUpdateFrequency = 100.0f;
 	MinNetUpdateFrequency = 33.0f;
+
+	DefaultMappingContext = CreateDefaultSubobject<UInputMappingContext>(TEXT("DefaultMappingContext"));
+	MoveAction = CreateDefaultSubobject<UInputAction>(TEXT("MoveAction"));
+	LookAction = CreateDefaultSubobject<UInputAction>(TEXT("LookAction"));
+	JumpAction = CreateDefaultSubobject<UInputAction>(TEXT("JumpAction"));
+	WalkAction = CreateDefaultSubobject<UInputAction>(TEXT("WalkAction"));
+	CrouchAction = CreateDefaultSubobject<UInputAction>(TEXT("CrouchAction"));
+	FireAction = CreateDefaultSubobject<UInputAction>(TEXT("FireAction"));
+	ReloadAction = CreateDefaultSubobject<UInputAction>(TEXT("ReloadAction"));
+	ADSAction = CreateDefaultSubobject<UInputAction>(TEXT("ADSAction"));
+	InteractAction = CreateDefaultSubobject<UInputAction>(TEXT("InteractAction"));
 
 	// FPS 캐릭터의 충돌 캡슐을 기본 플레이어 크기로 유지한다.
 	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
@@ -48,7 +68,16 @@ AValorCharacter::AValorCharacter()
 
 	CharacterStateComponent = CreateDefaultSubobject<UValorCharacterStateComponent>(TEXT("CharacterStateComponent"));
 	CameraLogicComponent = CreateDefaultSubobject<UValorCameraComponent>(TEXT("CameraLogicComponent"));
+	CombatComponent = CreateDefaultSubobject<UValorCombatComponent>(TEXT("CombatComponent"));
+	AbilitySystemComponent = CreateDefaultSubobject<UValorAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
+	CombatAttributeSet = CreateDefaultSubobject<UValorCombatAttributeSet>(TEXT("CombatAttributeSet"));
+	LagCompensationComponent = CreateDefaultSubobject<UValorLagCompensationComponent>(TEXT("LagCompensationComponent"));
 	InputRouterComponent = CreateDefaultSubobject<UValorInputRouterComponent>(TEXT("InputRouterComponent"));
+
+	AbilitySystemComponent->SetIsReplicated(true);
+	AbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
+
+	BuildDefaultInputMapping();
 }
 
 void AValorCharacter::BeginPlay()
@@ -67,12 +96,14 @@ void AValorCharacter::BeginPlay()
 
 	RefreshMovementSpeed();
 	RefreshFirstPersonPresentation();
+	InitializeAbilityActorInfo();
 }
 
 void AValorCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
 
+	InitializeAbilityActorInfo();
 	RefreshFirstPersonPresentation();
 }
 
@@ -80,6 +111,7 @@ void AValorCharacter::OnRep_Controller()
 {
 	Super::OnRep_Controller();
 
+	InitializeAbilityActorInfo();
 	RefreshFirstPersonPresentation();
 }
 
@@ -89,7 +121,7 @@ void AValorCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 	if (InputRouterComponent)
 	{
-		InputRouterComponent->SetupInput(PlayerInputComponent, Cast<APlayerController>(GetController()), DefaultMappingContext, MoveAction, LookAction, JumpAction, WalkAction, CrouchAction);
+		InputRouterComponent->SetupInput(PlayerInputComponent, Cast<APlayerController>(GetController()), DefaultMappingContext, MoveAction, LookAction, JumpAction, WalkAction, CrouchAction, FireAction, ReloadAction, ADSAction, InteractAction);
 	}
 }
 
@@ -200,6 +232,54 @@ void AValorCharacter::HandleCrouchInputReleased()
 	}
 }
 
+void AValorCharacter::HandleFireInputPressed()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleFireInputPressed();
+	}
+}
+
+void AValorCharacter::HandleFireInputReleased()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleFireInputReleased();
+	}
+}
+
+void AValorCharacter::HandleReloadInputPressed()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleReloadInputPressed();
+	}
+}
+
+void AValorCharacter::HandleADSInputPressed()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleADSInputPressed();
+	}
+}
+
+void AValorCharacter::HandleADSInputReleased()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleADSInputReleased();
+	}
+}
+
+void AValorCharacter::HandleInteractInputPressed()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleInteractInputPressed();
+	}
+}
+
 USceneComponent* AValorCharacter::GetWeaponAttachComponent() const
 {
 	if (GetMesh())
@@ -225,6 +305,16 @@ void AValorCharacter::GetWeaponViewPoint(FVector& OutLocation, FRotator& OutRota
 	}
 
 	GetActorEyesViewPoint(OutLocation, OutRotation);
+}
+
+UAbilitySystemComponent* AValorCharacter::GetAbilitySystemComponent() const
+{
+	return AbilitySystemComponent;
+}
+
+bool AValorCharacter::IsAlive() const
+{
+	return CombatAttributeSet && CombatAttributeSet->GetHealth() > 0.0f;
 }
 
 void AValorCharacter::ServerSetMoveInput_Implementation(FVector2D MoveInput)
@@ -338,6 +428,67 @@ void AValorCharacter::RefreshFirstPersonPresentation()
 	{
 		CameraLogicComponent->RefreshLocalPresentation(this, IsLocallyControlled());
 	}
+}
+
+void AValorCharacter::InitializeAbilityActorInfo()
+{
+	if (!AbilitySystemComponent)
+	{
+		return;
+	}
+
+	AbilitySystemComponent->InitAbilityActorInfo(this, this);
+
+	if (CombatComponent)
+	{
+		CombatComponent->InitializeAbilityBindings(AbilitySystemComponent);
+	}
+}
+
+void AValorCharacter::BuildDefaultInputMapping()
+{
+	if (!DefaultMappingContext || !MoveAction || !LookAction || !JumpAction || !WalkAction || !CrouchAction || !FireAction || !ReloadAction || !ADSAction || !InteractAction)
+	{
+		return;
+	}
+
+	MoveAction->ValueType = EInputActionValueType::Axis2D;
+	LookAction->ValueType = EInputActionValueType::Axis2D;
+	JumpAction->ValueType = EInputActionValueType::Boolean;
+	WalkAction->ValueType = EInputActionValueType::Boolean;
+	CrouchAction->ValueType = EInputActionValueType::Boolean;
+	FireAction->ValueType = EInputActionValueType::Boolean;
+	ReloadAction->ValueType = EInputActionValueType::Boolean;
+	ADSAction->ValueType = EInputActionValueType::Boolean;
+	InteractAction->ValueType = EInputActionValueType::Boolean;
+
+	DefaultMappingContext->MapKey(LookAction, EKeys::Mouse2D);
+	DefaultMappingContext->MapKey(JumpAction, EKeys::SpaceBar);
+	DefaultMappingContext->MapKey(WalkAction, EKeys::LeftShift);
+	DefaultMappingContext->MapKey(CrouchAction, EKeys::LeftControl);
+	DefaultMappingContext->MapKey(FireAction, EKeys::LeftMouseButton);
+	DefaultMappingContext->MapKey(ReloadAction, EKeys::R);
+	DefaultMappingContext->MapKey(ADSAction, EKeys::RightMouseButton);
+	DefaultMappingContext->MapKey(InteractAction, EKeys::E);
+
+	FEnhancedActionKeyMapping& MoveForwardMapping = DefaultMappingContext->MapKey(MoveAction, EKeys::W);
+	UInputModifierSwizzleAxis* MoveForwardSwizzle = NewObject<UInputModifierSwizzleAxis>(DefaultMappingContext);
+	MoveForwardSwizzle->Order = EInputAxisSwizzle::YXZ;
+	MoveForwardMapping.Modifiers.Add(MoveForwardSwizzle);
+
+	FEnhancedActionKeyMapping& MoveBackwardMapping = DefaultMappingContext->MapKey(MoveAction, EKeys::S);
+	UInputModifierSwizzleAxis* MoveBackwardSwizzle = NewObject<UInputModifierSwizzleAxis>(DefaultMappingContext);
+	MoveBackwardSwizzle->Order = EInputAxisSwizzle::YXZ;
+	UInputModifierNegate* MoveBackwardNegate = NewObject<UInputModifierNegate>(DefaultMappingContext);
+	MoveBackwardMapping.Modifiers.Add(MoveBackwardSwizzle);
+	MoveBackwardMapping.Modifiers.Add(MoveBackwardNegate);
+
+	FEnhancedActionKeyMapping& MoveRightMapping = DefaultMappingContext->MapKey(MoveAction, EKeys::D);
+	(void)MoveRightMapping;
+
+	FEnhancedActionKeyMapping& MoveLeftMapping = DefaultMappingContext->MapKey(MoveAction, EKeys::A);
+	UInputModifierNegate* MoveLeftNegate = NewObject<UInputModifierNegate>(DefaultMappingContext);
+	MoveLeftMapping.Modifiers.Add(MoveLeftNegate);
 }
 
 void AValorCharacter::ApplyMoveInput(const FVector2D& SanitizedMoveInput)
