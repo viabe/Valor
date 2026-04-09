@@ -469,7 +469,8 @@ void AValorCharacter::BuildDefaultInputMapping()
 	DefaultMappingContext->MapKey(FireAction, EKeys::LeftMouseButton);
 	DefaultMappingContext->MapKey(ReloadAction, EKeys::R);
 	DefaultMappingContext->MapKey(ADSAction, EKeys::RightMouseButton);
-	DefaultMappingContext->MapKey(InteractAction, EKeys::E);
+	DefaultMappingContext->MapKey(InteractAction, EKeys::F);
+	
 
 	FEnhancedActionKeyMapping& MoveForwardMapping = DefaultMappingContext->MapKey(MoveAction, EKeys::W);
 	UInputModifierSwizzleAxis* MoveForwardSwizzle = NewObject<UInputModifierSwizzleAxis>(DefaultMappingContext);

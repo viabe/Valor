@@ -41,6 +41,10 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category="Valor|Animation|Locomotion", meta=(AllowPrivateAccess="true"))
 	float GroundSpeed = 0.0f;
 
+	// 점프 상승, 낙하 루프, 착지 전환에 쓸 수 있도록 수직 속도를 별도로 노출한다.
+	UPROPERTY(BlueprintReadOnly, Category="Valor|Animation|Locomotion", meta=(AllowPrivateAccess="true"))
+	float VerticalSpeed = 0.0f;
+
 	UPROPERTY(BlueprintReadOnly, Category="Valor|Animation|Locomotion", meta=(AllowPrivateAccess="true"))
 	float NormalizedGroundSpeed = 0.0f;
 

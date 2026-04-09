@@ -55,6 +55,7 @@ void UValorAnimInstance::UpdateLocomotionData()
 
 	const FVector Velocity = OwnerCharacter->GetVelocity();
 	GroundSpeed = Velocity.Size2D();
+	VerticalSpeed = Velocity.Z;
 
 	float MaxGroundSpeed = 1.0f;
 	if (MovementComponent)
@@ -74,7 +75,9 @@ void UValorAnimInstance::UpdateLocomotionData()
 
 	if (bShouldMove)
 	{
-		const FVector LocalVelocity = OwnerCharacter->GetActorTransform().InverseTransformVectorNoScale(Velocity);
+		// FPS는 캐릭터 메시가 아니라 현재 조준/시선 방향 기준으로 스트레이프 애니메이션을 계산해야 자연스럽다.
+		const FRotator AimYawRotation(0.0f, OwnerCharacter->GetBaseAimRotation().Yaw, 0.0f);
+		const FVector LocalVelocity = AimYawRotation.UnrotateVector(FVector(Velocity.X, Velocity.Y, 0.0f));
 		MoveDirection = FMath::RadiansToDegrees(FMath::Atan2(LocalVelocity.Y, LocalVelocity.X));
 	}
 	else
