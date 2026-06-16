@@ -1,6 +1,7 @@
 #include "ValorAnimInstance.h"
 
 #include "Components/ValorCombatComponent.h"
+#include "Engine/Engine.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "ValorCharacter.h"
 #include "Weapons/ValorWeaponBase.h"
@@ -24,8 +25,23 @@ void UValorAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 
 	UpdateLocomotionData();
 	UpdateCombatData(DeltaSeconds);
+	HandleFireMontage();
 	UpdateAimData();
 	UpdateExtensionData();
+
+#if !UE_BUILD_SHIPPING
+	// 디버그 확인용: 실제 폰의 AnimInstance가 받는 값을 화면에 직접 출력해 에디터 디버거와 무관하게 진단한다. (원인 확정 후 제거)
+	if (GEngine && OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+	{
+		const FColor DebugColor = bHasEquippedWeapon ? FColor::Green : FColor::Red;
+		GEngine->AddOnScreenDebugMessage(7001, 0.0f, DebugColor,
+			FString::Printf(TEXT("[Aim] Equipped=%d  Alpha=%.2f  Pitch=%.1f  Weapon=%s"),
+				bHasEquippedWeapon ? 1 : 0,
+				AimOffsetAlpha,
+				AimPitch,
+				EquippedWeapon ? *EquippedWeapon->GetName() : TEXT("None")));
+	}
+#endif
 }
 
 void UValorAnimInstance::CacheAnimationSources()
@@ -37,6 +53,7 @@ void UValorAnimInstance::CacheAnimationSources()
 		CharacterStateComponent = nullptr;
 		CombatComponent = nullptr;
 		EquippedWeapon = nullptr;
+		LastConsumedFireSimulationWorldTime = -1000.0f;
 		return;
 	}
 
@@ -117,6 +134,37 @@ void UValorAnimInstance::UpdateCombatData(float DeltaSeconds)
 	TimeSinceLastFire = FMath::Max(0.0f, GetWorld()->GetTimeSeconds() - LastFireTime);
 }
 
+void UValorAnimInstance::HandleFireMontage()
+{
+	if (!CombatComponent)
+	{
+		LastConsumedFireSimulationWorldTime = -1000.0f;
+		return;
+	}
+
+	const float LastFireTime = CombatComponent->GetLastFireSimulationWorldTime();
+	if (LastFireTime <= LastConsumedFireSimulationWorldTime + KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// 서버가 승인한 새 발사만 소비해 자동 사격에서도 사격 수와 애니메이션 수가 어긋나지 않게 맞춘다.
+	LastConsumedFireSimulationWorldTime = LastFireTime;
+
+	if (!EquippedWeapon || bIsReloading)
+	{
+		return;
+	}
+
+	UAnimMontage* FireMontage = EquippedWeapon->GetFireMontage();
+	if (!FireMontage)
+	{
+		return;
+	}
+
+	Montage_Play(FireMontage, EquippedWeapon->GetFireMontagePlayRate(), EMontagePlayReturnType::MontageLength, 0.0f, false);
+}
+
 void UValorAnimInstance::UpdateAimData()
 {
 	if (!OwnerCharacter)
@@ -124,15 +172,23 @@ void UValorAnimInstance::UpdateAimData()
 		return;
 	}
 
+	AimOffsetAlpha = bHasEquippedWeapon ? 1.0f : 0.0f;
+	if (!bHasEquippedWeapon)
+	{
+		// 비장착 상태에서는 AnimGraph 끝에 AimOffset이 있어도 기본 이동 포즈를 오염시키지 않는다.
+		AimPitch = 0.0f;
+		AimYawOffset = 0.0f;
+		return;
+	}
+
 	const FRotator ActorRotation = OwnerCharacter->GetActorRotation();
 	const FRotator BaseAimRotation = OwnerCharacter->GetBaseAimRotation();
 	const FRotator AimDelta = (BaseAimRotation - ActorRotation).GetNormalized();
 
-	AimPitch = AimDelta.Pitch;
-	if (AimPitch > 180.0f)
-	{
-		AimPitch -= 360.0f;
-	}
+	// GetBaseAimRotation 기준으로는 위를 볼 때 Pitch가 음수로 나온다.
+	// 그런데 AimOffset 에셋은 위 포즈를 +90, 아래 포즈를 -90으로 두는 표준 규약을 쓰므로
+	// 부호를 뒤집어 줘야 시선 방향과 상체 조준 방향이 일치한다. (안 뒤집으면 위/아래가 반대로 적용됨)
+	AimPitch = -AimDelta.Pitch;
 
 	AimYawOffset = AimDelta.Yaw;
 }

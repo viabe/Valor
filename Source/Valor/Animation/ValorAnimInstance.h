@@ -89,6 +89,9 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category="Valor|Animation|Aim", meta=(AllowPrivateAccess="true"))
 	float AimYawOffset = 0.0f;
 
+	UPROPERTY(BlueprintReadOnly, Category="Valor|Animation|Aim", meta=(AllowPrivateAccess="true"))
+	float AimOffsetAlpha = 0.0f;
+
 	// 캐릭터 공통 데이터 계약은 유지하되, 이후 캐릭터별 오버라이드에 사용할 수 있도록 남겨둔다.
 	UPROPERTY(BlueprintReadOnly, Category="Valor|Animation|Profile", meta=(AllowPrivateAccess="true"))
 	FName AnimationProfileName = TEXT("Default");
@@ -107,7 +110,11 @@ private:
 	void CacheAnimationSources();
 	void UpdateLocomotionData();
 	void UpdateCombatData(float DeltaSeconds);
+	void HandleFireMontage();
 	void UpdateAimData();
 	void UpdateExtensionData();
 	EValorMovementState ResolveMovementStateFallback() const;
+
+	// 발사 몽타주는 서버가 승인한 새 사격 시점에만 한 번 재생해야 하므로 마지막 소비 시각을 따로 기억한다.
+	float LastConsumedFireSimulationWorldTime = -1000.0f;
 };

@@ -6,6 +6,7 @@
 #include "ValorWeaponBase.generated.h"
 
 class AValorCharacter;
+class UAnimMontage;
 class USkeletalMeshComponent;
 class USceneComponent;
 class UValorWeaponDataAsset;
@@ -56,6 +57,8 @@ public:
 	bool IsAutomatic() const;
 	float GetADSFieldOfView() const;
 	float GetADSInterpSpeed() const;
+	UAnimMontage* GetFireMontage() const;
+	float GetFireMontagePlayRate() const;
 	float GetTraceDistance() const;
 	EValorWeaponAnimationType GetWeaponAnimationType() const;
 	EValorWallPenetrationTier GetPenetrationTier() const;
@@ -89,6 +92,7 @@ protected:
 
 private:
 	void InitializeFallbackConfig();
+	void RefreshWeaponMeshAlignment();
 	void RefreshSprayState(float CurrentWorldTimeSeconds);
 
 	float LastServerFireWorldTime = -1000.0f;

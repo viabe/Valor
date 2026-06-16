@@ -58,13 +58,20 @@ void AValorWeaponBase::OnEquippedBy(AValorCharacter* NewOwnerCharacter)
 	{
 		if (USceneComponent* AttachComponent = WeaponOwner->GetWeaponAttachComponent())
 		{
-			AttachToComponent(AttachComponent, FAttachmentTransformRules::SnapToTargetIncludingScale, WeaponOwner->GetWeaponAttachSocketName());
+			// 캐릭터 손 소켓은 액터 루트 기준점으로만 사용하고, 실제 총 위치는 무기 메시의 그립 소켓을 역정렬해 맞춘다.
+			AttachToComponent(AttachComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale, WeaponOwner->GetWeaponAttachSocketName());
+			RefreshWeaponMeshAlignment();
 		}
 	}
 }
 
 void AValorWeaponBase::OnUnequipped()
 {
+	if (WeaponMesh)
+	{
+		WeaponMesh->SetRelativeTransform(FTransform::Identity);
+	}
+
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 	OwningCharacter = nullptr;
 	SetOwner(nullptr);
@@ -202,6 +209,16 @@ float AValorWeaponBase::GetADSInterpSpeed() const
 	return GetWeaponConfig().ADSInterpSpeed;
 }
 
+UAnimMontage* AValorWeaponBase::GetFireMontage() const
+{
+	return GetWeaponConfig().FireMontage;
+}
+
+float AValorWeaponBase::GetFireMontagePlayRate() const
+{
+	return GetWeaponConfig().FireMontagePlayRate;
+}
+
 float AValorWeaponBase::GetTraceDistance() const
 {
 	return GetWeaponConfig().TraceDistanceCm;
@@ -285,6 +302,30 @@ void AValorWeaponBase::InitializeFallbackConfig()
 		{3000.0f, 150.0f, 37.0f, 31.0f},
 		{50000.0f, 140.0f, 34.0f, 28.0f}
 	};
+}
+
+void AValorWeaponBase::RefreshWeaponMeshAlignment()
+{
+	if (!WeaponMesh)
+	{
+		return;
+	}
+
+	WeaponMesh->SetRelativeTransform(FTransform::Identity);
+
+	const FName GripSocketName = GetWeaponConfig().GripSocketName;
+	if (GripSocketName.IsNone() || !WeaponMesh->DoesSocketExist(GripSocketName))
+	{
+		return;
+	}
+
+	const FTransform GripSocketTransform = WeaponMesh->GetSocketTransform(GripSocketName, RTS_Component);
+	const FQuat MeshRelativeRotation = GripSocketTransform.GetRotation().Inverse();
+	const FVector MeshRelativeLocation = MeshRelativeRotation.RotateVector(-GripSocketTransform.GetLocation());
+
+	// 소켓 정렬은 위치/회전만 보정하고, 무기 원본 스케일은 유지해야 메시가 사라지지 않는다.
+	WeaponMesh->SetRelativeLocationAndRotation(MeshRelativeLocation, MeshRelativeRotation);
+	WeaponMesh->SetRelativeScale3D(FVector::OneVector);
 }
 
 void AValorWeaponBase::RefreshSprayState(float CurrentWorldTimeSeconds)

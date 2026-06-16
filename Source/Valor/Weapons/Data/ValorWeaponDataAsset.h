@@ -5,6 +5,8 @@
 #include "Engine/DataAsset.h"
 #include "ValorWeaponDataAsset.generated.h"
 
+class UAnimMontage;
+
 UENUM(BlueprintType)
 enum class EValorWallPenetrationTier : uint8
 {
@@ -69,6 +71,18 @@ struct FValorWeaponConfig
 	// 애니메이션 레이어가 어떤 무기군 포즈를 써야 하는지 분류한다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	EValorWeaponAnimationType AnimationType = EValorWeaponAnimationType::Rifle;
+
+	// 발사 애니메이션은 무기별로 다를 수 있으므로 데이터 자산에서 상체 몽타주를 갈아끼울 수 있게 둔다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Animation")
+	TObjectPtr<UAnimMontage> FireMontage = nullptr;
+
+	// 총기 메시 안의 그립 소켓을 손 소켓과 정렬해, 메시 피벗이 달라도 같은 장착 규칙을 유지한다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Attachment")
+	FName GripSocketName = TEXT("GripSocket");
+
+	// 사격 템포와 애니메이션 감각을 맞추기 위해 무기별 재생 속도도 함께 노출한다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Animation", meta=(ClampMin="0.1"))
+	float FireMontagePlayRate = 1.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	bool bAutomatic = true;
