@@ -8,6 +8,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/ValorCameraComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
+#include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -20,6 +21,7 @@
 
 UValorCombatComponent::UValorCombatComponent()
 {
+	// 반동은 발사 시점에만 즉시 적용하고 자동 회복은 하지 않으므로 매 프레임 Tick이 필요 없다.
 	PrimaryComponentTick.bCanEverTick = false;
 	SetIsReplicatedByDefault(true);
 
@@ -184,7 +186,7 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 		}
 	}
 
-	MulticastSimulateFire(ImpactPoint, ShotData.RecoilKick, bHitCharacter);
+	MulticastSimulateFire(ImpactPoint, FRotator(ShotData.RecoilStepPitchDegrees, ShotData.RecoilStepYawDegrees, 0.0f), bHitCharacter);
 }
 
 void UValorCombatComponent::ExecuteServerReloadAbility()
@@ -264,7 +266,7 @@ void UValorCombatComponent::ServerInteractWithPickup_Implementation()
 	}
 }
 
-void UValorCombatComponent::MulticastSimulateFire_Implementation(FVector_NetQuantize TraceEnd, FRotator RecoilKick, bool bDidHitCharacter)
+void UValorCombatComponent::MulticastSimulateFire_Implementation(FVector_NetQuantize TraceEnd, FRotator ViewPunchStep, bool bDidHitCharacter)
 {
 	if (!OwnerCharacter || GetNetMode() == NM_DedicatedServer)
 	{
@@ -274,12 +276,35 @@ void UValorCombatComponent::MulticastSimulateFire_Implementation(FVector_NetQuan
 	// 애니메이션 인스턴스가 발사 몽타주나 리코일 레이어 타이밍을 잡을 수 있도록 최근 발사 시각을 남긴다.
 	LastFireSimulationWorldTime = GetWorld() ? GetWorld()->GetTimeSeconds() : LastFireSimulationWorldTime;
 
-	if (OwnerCharacter->IsLocallyControlled() && OwnerCharacter->GetController())
+	// 발로란트식 반동은 두 층으로 나뉜다:
+	//  (1) 탄도: 조준(컨트롤 회전) 대비 탄이 패턴대로 벌어짐 → 서버 히트스캔(ApplySpreadToDirection)에 이미 반영됨.
+	//  (2) 연출: 연사 중 화면이 같은 패턴을 따라 누적으로 밀려 올라가고, 사격을 멈추면 원위치로 복귀하는 뷰 펀치.
+	// 탄도와 연출이 같은 패턴을 공유하므로(스케일 1.0) 연사 중 탄은 대략 크로스헤어 위치에 맺히고,
+	// 플레이어는 "밀려 올라가는 크로스헤어를 마우스로 끌어내려 타겟에 붙잡아 두는" 발로란트식 컨트롤을 하게 된다.
+	// 뷰 펀치는 FollowCamera의 상대 회전만 건드리므로 컨트롤 회전(조준)과 탄도에는 전혀 영향이 없고,
+	// GetWeaponViewPoint도 컨트롤 회전 기준이라 리슨서버 호스트의 탄도에 펀치가 새지 않는다.
+	if (OwnerCharacter->IsLocallyControlled() && EquippedWeapon)
 	{
-		// 로컬 소유자만 즉시 카메라 킥을 받아 사격 감각을 유지한다.
-		OwnerCharacter->AddControllerPitchInput(-RecoilKick.Pitch);
-		OwnerCharacter->AddControllerYawInput(RecoilKick.Yaw);
+		if (UValorCameraComponent* CameraLogicComponent = OwnerCharacter->GetCameraLogicComponent())
+		{
+			const FValorRecoilProfile& RecoilProfile = EquippedWeapon->GetRecoilProfile();
+			CameraLogicComponent->AddRecoilViewPunch(ViewPunchStep * RecoilProfile.ViewPunchScale, RecoilProfile.ViewPunchRecoveryDelaySeconds, RecoilProfile.ViewPunchRecoverySpeed, RecoilProfile.ViewPunchMaxDegrees);
+		}
 	}
+
+	// 아직 정식 트레이서/데칼 VFX가 없으므로, 개발 빌드에서 스프레이 패턴이 눈에 보이도록
+	// 임팩트를 디버그 라인/포인트로 임시 표시한다. (TODO: 나이아가라 트레이서 + 임팩트 데칼 VFX로 교체.)
+#if ENABLE_DRAW_DEBUG
+	if (UWorld* World = GetWorld())
+	{
+		FVector ViewLocation = FVector::ZeroVector;
+		FRotator ViewRotation = FRotator::ZeroRotator;
+		OwnerCharacter->GetWeaponViewPoint(ViewLocation, ViewRotation);
+		const FColor ShotColor = bDidHitCharacter ? FColor::Red : FColor::Yellow;
+		DrawDebugLine(World, ViewLocation, TraceEnd, ShotColor, false, 1.5f, 0, 1.0f);
+		DrawDebugPoint(World, TraceEnd, 9.0f, ShotColor, false, 3.0f);
+	}
+#endif
 
 	(void)TraceEnd;
 	(void)bDidHitCharacter;

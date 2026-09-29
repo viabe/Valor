@@ -300,7 +300,11 @@ void AValorCharacter::GetWeaponViewPoint(FVector& OutLocation, FRotator& OutRota
 	if (FollowCamera)
 	{
 		OutLocation = FollowCamera->GetComponentLocation();
-		OutRotation = FollowCamera->GetComponentRotation();
+		// 방향은 카메라 컴포넌트 회전이 아니라 컨트롤 회전(GetViewRotation)을 쓴다.
+		// FollowCamera에는 시각적 반동 펀치(연출용 상대 회전)가 실릴 수 있는데, 사격/상호작용 방향은
+		// 펀치와 무관하게 순수 조준을 따라야 하기 때문이다. 특히 리슨서버 호스트는 서버가 자기
+		// FollowCamera를 직접 읽으므로, 여기서 분리하지 않으면 연출 킥이 실제 탄도에 새어 들어간다.
+		OutRotation = GetViewRotation();
 		return;
 	}
 

@@ -74,7 +74,7 @@ protected:
 	void ServerInteractWithPickup();
 
 	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastSimulateFire(FVector_NetQuantize TraceEnd, FRotator RecoilKick, bool bDidHitCharacter);
+	void MulticastSimulateFire(FVector_NetQuantize TraceEnd, FRotator ViewPunchStep, bool bDidHitCharacter);
 
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastPlayReloadCue();
