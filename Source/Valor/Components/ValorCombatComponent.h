@@ -27,7 +27,10 @@ struct FValorHitScanResult
 };
 
 /**
- * 전투 컴포넌트: 사격/재장전/ADS/줍기의 입력 → 서버 요청 → 서버 판정 → 연출 흐름을 담당한다.
+ * 전투 컴포넌트: 사격/재장전/ADS/줍기·교체의 입력 → 서버 요청 → 서버 판정 → 연출 흐름을 담당한다.
+ *
+ * 줍기·교체 흐름(서버 권위): F 입력 → ServerInteractWithPickup → 서버가 조준선으로 픽업을 고른다 → 새 총 스폰 →
+ *  들고 있던 총은 탄약을 가진 채 바닥 픽업으로 떨어뜨림 → 새 총 장착(복제된 EquippedWeapon으로 클라에 반영).
  *
  * 사격 흐름(발로란트 넷코드 원칙: 클라 예측 + 서버 권위 + 발사 시각 기준 되감기):
  *  1) 소유 클라가 발사 입력을 받으면 로컬 발사 루프(연사 속도 타이머)가 한 발 요청(시각 + 조준 방향)을 만든다.
@@ -128,6 +131,28 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Validation", meta=(ClampMin="1.0"))
 	float MaxAimDivergenceDegrees = 45.0f;
 
+	// === 줍기 / 교체 / 떨어뜨리기 ===
+
+	// 줍기 판정 거리(cm, 눈 기준 조준선 방향). 조준선이 픽업의 줍기 반경 안을 지나가야 후보가 된다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Pickup", meta=(ClampMin="50.0"))
+	float PickupInteractDistance = 350.0f;
+
+	// 떨어뜨린 총을 나타낼 픽업 클래스. 표시 메시가 비어 있는 클래스여야 총마다 자기 메시로 보인다(기본: C++ 픽업).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Pickup")
+	TSubclassOf<AValorWeaponPickup> DroppedWeaponPickupClass;
+
+	// 총을 떨어뜨리는 위치: 캐릭터 앞 이 거리(cm)의 바닥.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Pickup", meta=(ClampMin="0.0"))
+	float DropForwardDistance = 100.0f;
+
+	// 앞에 벽이 있으면 벽에서 이만큼(cm) 띄워 내려놓는다(총이 벽에 박히지 않게).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Pickup", meta=(ClampMin="0.0"))
+	float DropWallClearance = 30.0f;
+
+	// 떨어뜨릴 바닥을 아래로 찾는 최대 깊이(cm). 못 찾으면 캐릭터 발밑에 둔다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Pickup", meta=(ClampMin="10.0"))
+	float DropGroundSearchDepth = 400.0f;
+
 	// 발사 요청 1발. 신뢰성 RPC로 보내 유실/순서 뒤바뀜이 없게 한다(유실되면 서버/클라 스프레이 진행도가 한 발 어긋남).
 	UFUNCTION(Server, Reliable)
 	void ServerFireShot(const FValorShotRequest& Request);
@@ -176,10 +201,21 @@ private:
 	// 로컬 사수(예측 클라 또는 리슨 호스트)의 발사 연출.
 	void PlayLocalShotPresentation(const FVector& ImpactPoint, const FVector& ImpactNormal, bool bBlockingHit, bool bHitCharacter);
 
+	// 서버 전용: 새 총을 장착한다. 이미 들고 있던 총은 DropEquippedWeapon으로 바닥에 떨어뜨린다(발로란트식 교체).
 	void EquipWeapon(AValorWeaponBase* NewWeapon);
+
+	// 서버 전용: 들고 있는 총을 바닥 픽업으로 바꿔 내려놓는다(총 종류·탄약 유지).
+	// 교체에서 쓰고, 이후 사망 시 드롭·버리기 키도 같은 함수를 쓰면 된다.
+	void DropEquippedWeapon();
+
+	// 서버 전용: 떨어뜨릴 위치와 방향(캐릭터 앞 바닥, 벽 앞에서 멈춤).
+	FTransform ComputeDropTransform() const;
+
 	void ApplyEquippedWeaponAttachment() const;
 	void RefreshADSOnLocalClient() const;
 	void FinishReload();
+
+	// 서버 전용: 조준선에 가장 가까운 줍기 가능한 픽업(거리·줍기 반경·시야 확인). 없으면 nullptr.
 	AValorWeaponPickup* FindPickupInView() const;
 
 	void PerformServerHitScan(const FVector& TraceStart, const FVector& ShotDirection, float MaxDistance, float ClientShotTimestampSeconds, FValorHitScanResult& OutResult) const;

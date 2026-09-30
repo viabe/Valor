@@ -220,6 +220,19 @@ void AValorWeaponBase::ReloadFromReserve()
 	CurrentReserveAmmo -= AmmoToLoad;
 }
 
+void AValorWeaponBase::RestoreAmmoState(int32 MagazineAmmo, int32 ReserveAmmo)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	// 데이터 에셋 한도로 자른다: 떨어뜨린 뒤 에셋 수치가 바뀌었거나 값이 잘못돼도 탄창이 넘치지 않게 한다.
+	const FValorWeaponConfig& Config = GetWeaponConfig();
+	CurrentMagazineAmmo = FMath::Clamp(MagazineAmmo, 0, Config.MagazineSize);
+	CurrentReserveAmmo = FMath::Clamp(ReserveAmmo, 0, Config.MaxReserveAmmo);
+}
+
 void AValorWeaponBase::PlayFireEffects(const FVector& ImpactPoint, const FVector& ImpactNormal, bool bBlockingHit, bool bHitCharacter) const
 {
 	UWorld* World = GetWorld();

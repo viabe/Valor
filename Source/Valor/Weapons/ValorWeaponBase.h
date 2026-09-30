@@ -73,6 +73,13 @@ public:
 	int32 GetCurrentMagazineAmmo() const { return CurrentMagazineAmmo; }
 	int32 GetCurrentReserveAmmo() const { return CurrentReserveAmmo; }
 
+	// 서버 전용: 바닥에 떨어졌던 총을 다시 주웠을 때 떨어뜨릴 때의 탄약으로 되돌린다.
+	// 발로란트 규칙: 바닥의 총은 탄창·예비 탄약을 그대로 가진다(반쯤 쏜 총을 주우면 반만 남아 있다).
+	void RestoreAmmoState(int32 MagazineAmmo, int32 ReserveAmmo);
+
+	// 바닥 픽업이 같은 메시를 보여 줄 수 있게 노출한다(클래스 기본 객체에서도 읽는다).
+	USkeletalMeshComponent* GetWeaponMesh() const { return WeaponMesh; }
+
 	// === 연출(로컬 전용) ===
 
 	// 트레이서/탄흔/총구 화염/사운드를 재생한다. 서버 판정과 무관하며 데디케이티드 서버에서는 아무것도 하지 않는다.

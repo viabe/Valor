@@ -5,6 +5,7 @@
 #include "AbilitySystem/Abilities/UGA_WeaponReload.h"
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
 #include "AbilitySystem/ValorAbilitySystemComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/ValorCameraComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
 #include "Engine/World.h"
@@ -33,6 +34,7 @@ UValorCombatComponent::UValorCombatComponent()
 	FireAbilityClass = UUGA_WeaponFire::StaticClass();
 	ReloadAbilityClass = UUGA_WeaponReload::StaticClass();
 	ADSAbilityClass = UUGA_WeaponADS::StaticClass();
+	DroppedWeaponPickupClass = AValorWeaponPickup::StaticClass();
 }
 
 void UValorCombatComponent::BeginPlay()
@@ -568,6 +570,8 @@ void UValorCombatComponent::ServerInteractWithPickup_Implementation()
 		return;
 	}
 
+	// 새 총을 먼저 만든 뒤에 교체한다: 스폰이 실패하면 들고 있던 총을 잃지 않는다.
+	// 교체 시 들고 있던 총은 EquipWeapon 안에서 바닥에 떨어진다.
 	if (AValorWeaponPickup* Pickup = FindPickupInView())
 	{
 		if (AValorWeaponBase* SpawnedWeapon = Pickup->SpawnWeaponForPickup(OwnerCharacter))
@@ -613,9 +617,16 @@ void UValorCombatComponent::MulticastPlayReloadCue_Implementation()
 
 void UValorCombatComponent::OnRep_EquippedWeapon(AValorWeaponBase* PreviousWeapon)
 {
-	if (PreviousWeapon && PreviousWeapon != EquippedWeapon)
+	// 교체된 이전 총은 서버에서 파괴되므로, 파괴 복제가 이 OnRep보다 먼저 도착했을 수 있다(IsValid로 확인).
+	if (IsValid(PreviousWeapon) && PreviousWeapon != EquippedWeapon)
 	{
 		PreviousWeapon->OnUnequipped();
+	}
+
+	// 서버는 교체할 때 조준을 해제한다. 소유 클라도 조준 의도를 지워 서버와 같은 상태(힙)로 예측한다.
+	if (PreviousWeapon != EquippedWeapon && OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+	{
+		bLocalADSIntent = false;
 	}
 
 	ApplyEquippedWeaponAttachment();
@@ -640,17 +651,107 @@ void UValorCombatComponent::EquipWeapon(AValorWeaponBase* NewWeapon)
 		return;
 	}
 
-	if (EquippedWeapon)
+	// 발로란트 규칙: 총을 든 채 다른 총을 주우면, 들고 있던 총은 탄약을 가진 채 바닥에 떨어지고 새 총으로 바뀐다.
+	if (EquippedWeapon && EquippedWeapon != NewWeapon)
 	{
-		EquippedWeapon->Destroy();
+		DropEquippedWeapon();
+	}
+
+	// 이전 총의 재장전 타이머가 새 총에 적용되지 않게 끊는다(재장전 중 교체 → 새 총이 즉시 채워지는 문제 방지).
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReloadTimerHandle);
+	}
+
+	// 교체하면 조준이 풀린다. 우클릭을 누르고 있어도 다시 눌러야 조준한다(어빌리티 종료 → SetADSStateFromAbility(false)).
+	if (AbilitySystemComponent && ADSAbilityHandle.IsValid())
+	{
+		AbilitySystemComponent->CancelAbilityHandle(ADSAbilityHandle);
 	}
 
 	EquippedWeapon = NewWeapon;
-	EquippedWeapon->OnEquippedBy(OwnerCharacter);
 	bIsReloading = false;
 	bIsADS = false;
 	LastAcceptedShotTime = -1000.0;
 	ApplyEquippedWeaponAttachment();
+
+	// 리슨 서버 호스트는 EquippedWeapon OnRep이 오지 않으므로 로컬 조준 상태를 여기서 정리한다.
+	if (OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+	{
+		bLocalADSIntent = false;
+		RefreshADSOnLocalClient();
+	}
+}
+
+void UValorCombatComponent::DropEquippedWeapon()
+{
+	UWorld* World = GetWorld();
+	if (!World || !GetOwner() || !GetOwner()->HasAuthority() || !EquippedWeapon)
+	{
+		return;
+	}
+
+	AValorWeaponBase* WeaponToDrop = EquippedWeapon;
+	EquippedWeapon = nullptr;
+
+	// 바닥의 총은 별도 픽업 액터로 만들고(총 종류 + 탄약을 옮김), 손에 들고 있던 무기 액터는 파괴한다.
+	// 픽업은 서버에서 스폰되어 복제되므로 모든 클라에 같은 위치로 보인다.
+	UClass* PickupClass = DroppedWeaponPickupClass ? DroppedWeaponPickupClass.Get() : AValorWeaponPickup::StaticClass();
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	if (AValorWeaponPickup* DroppedPickup = World->SpawnActor<AValorWeaponPickup>(PickupClass, ComputeDropTransform(), SpawnParameters))
+	{
+		DroppedPickup->InitializeFromDroppedWeapon(*WeaponToDrop);
+	}
+	else
+	{
+		UE_LOG(LogValorCombat, Warning, TEXT("총을 떨어뜨릴 픽업을 스폰하지 못했다: %s"), *GetNameSafe(WeaponToDrop));
+	}
+
+	WeaponToDrop->OnUnequipped();
+	WeaponToDrop->Destroy();
+}
+
+FTransform UValorCombatComponent::ComputeDropTransform() const
+{
+	const UWorld* World = GetWorld();
+	if (!World || !OwnerCharacter)
+	{
+		return GetOwner() ? GetOwner()->GetActorTransform() : FTransform::Identity;
+	}
+
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	OwnerCharacter->GetWeaponViewPoint(ViewLocation, ViewRotation);
+
+	// 바라보는 방향(수평)으로 내려놓는다. 위·아래를 보고 있어도 총은 바닥에 눕는다.
+	const FRotator DropRotation(0.0f, ViewRotation.Yaw, 0.0f);
+	const FVector Forward = DropRotation.Vector();
+
+	const FVector CharacterCenter = OwnerCharacter->GetActorLocation();
+	const float HalfHeight = OwnerCharacter->GetCapsuleComponent() ? OwnerCharacter->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 88.0f;
+	const FVector Feet = CharacterCenter - FVector(0.0f, 0.0f, HalfHeight);
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ValorWeaponDrop), false, OwnerCharacter);
+
+	// 1) 캐릭터 중심 높이에서 앞으로. 벽이 가까우면 벽 앞에서 멈춘다(벽 너머로 총이 넘어가지 않게).
+	float ForwardDistance = DropForwardDistance;
+	FHitResult WallHit;
+	if (World->LineTraceSingleByChannel(WallHit, CharacterCenter, CharacterCenter + Forward * DropForwardDistance, ECC_Visibility, QueryParams))
+	{
+		ForwardDistance = FMath::Max(WallHit.Distance - DropWallClearance, 0.0f);
+	}
+
+	// 2) 그 지점에서 아래로 바닥을 찾는다. 못 찾으면(허공 등) 캐릭터 발밑에 둔다.
+	const FVector AboveDropPoint = CharacterCenter + Forward * ForwardDistance;
+	FVector DropLocation = Feet;
+	FHitResult GroundHit;
+	if (World->LineTraceSingleByChannel(GroundHit, AboveDropPoint, AboveDropPoint - FVector(0.0f, 0.0f, DropGroundSearchDepth), ECC_Visibility, QueryParams))
+	{
+		DropLocation = GroundHit.ImpactPoint;
+	}
+
+	return FTransform(DropRotation, DropLocation);
 }
 
 void UValorCombatComponent::ApplyEquippedWeaponAttachment() const
@@ -697,24 +798,57 @@ void UValorCombatComponent::FinishReload()
 
 AValorWeaponPickup* UValorCombatComponent::FindPickupInView() const
 {
-	if (!OwnerCharacter)
+	UWorld* World = GetWorld();
+	if (!World || !OwnerCharacter)
 	{
 		return nullptr;
 	}
 
-	FVector TraceStart = FVector::ZeroVector;
-	FRotator TraceRotation = FRotator::ZeroRotator;
-	OwnerCharacter->GetWeaponViewPoint(TraceStart, TraceRotation);
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	OwnerCharacter->GetWeaponViewPoint(ViewLocation, ViewRotation);
+	const FVector ViewDirection = ViewRotation.Vector();
 
-	const FVector TraceEnd = TraceStart + (TraceRotation.Vector() * 350.0f);
-	FHitResult HitResult;
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ValorPickupTrace), false, OwnerCharacter);
-	if (!GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_Visibility, QueryParams))
+	// 픽업은 충돌이 없으므로(사격을 막지 않게) 물리 트레이스 대신 조준선과의 거리로 고른다.
+	// 줍기 입력 때만 서버에서 한 번 도는 순회라 비용이 작다(맵에 놓인 픽업은 많아야 수십 개).
+	struct FPickupCandidate
 	{
-		return nullptr;
+		AValorWeaponPickup* Pickup;
+		float DistanceFromAimLine;
+	};
+
+	TArray<FPickupCandidate, TInlineAllocator<8>> Candidates;
+	for (TActorIterator<AValorWeaponPickup> It(World); It; ++It)
+	{
+		AValorWeaponPickup* Pickup = *It;
+		float DistanceFromAimLine = 0.0f;
+		if (IsValid(Pickup) && Pickup->IsPickupAvailable()
+			&& AValorWeaponPickup::ComputeAimOffset(ViewLocation, ViewDirection, Pickup->GetActorLocation(), Pickup->GetInteractionRadius(), PickupInteractDistance, DistanceFromAimLine))
+		{
+			Candidates.Add({Pickup, DistanceFromAimLine});
+		}
 	}
 
-	return Cast<AValorWeaponPickup>(HitResult.GetActor());
+	// 크로스헤어에 가장 가까운 총부터, 벽 너머가 아닌(시야가 닿는) 첫 픽업을 고른다.
+	Candidates.Sort([](const FPickupCandidate& A, const FPickupCandidate& B) { return A.DistanceFromAimLine < B.DistanceFromAimLine; });
+	for (const FPickupCandidate& Candidate : Candidates)
+	{
+		const FVector PickupLocation = Candidate.Pickup->GetActorLocation();
+		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ValorPickupLineOfSight), false, OwnerCharacter);
+		QueryParams.AddIgnoredActor(Candidate.Pickup);
+
+		// 바닥에 놓인 총은 중심이 바닥면에 붙어 있어 시선이 총 바로 앞 바닥에 닿을 수 있다.
+		// 그래서 막힌 지점이 총의 줍기 반경 안이면 보이는 것으로 친다.
+		FHitResult BlockingHit;
+		const bool bBlocked = World->LineTraceSingleByChannel(BlockingHit, ViewLocation, PickupLocation, ECC_Visibility, QueryParams)
+			&& FVector::Dist(BlockingHit.ImpactPoint, PickupLocation) > Candidate.Pickup->GetInteractionRadius();
+		if (!bBlocked)
+		{
+			return Candidate.Pickup;
+		}
+	}
+
+	return nullptr;
 }
 
 void UValorCombatComponent::PerformServerHitScan(const FVector& TraceStart, const FVector& ShotDirection, float MaxDistance, float ClientShotTimestampSeconds, FValorHitScanResult& OutResult) const
