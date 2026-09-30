@@ -77,6 +77,9 @@ FValorWeaponConfig::FValorWeaponConfig()
 	AltFire.RecoilMultiplier = 0.9f;
 	AltFire.CameraRecoilFollowRatio = 1.0f;
 
+	// ADS 이동 속도: 힙 이동 속도(5.4m/s)의 76% = 4.104m/s (위키 "Move Speed 76% (4.104 m/sec)").
+	AltFire.MoveSpeedMultiplier = 0.76f;
+
 	// ADS는 조준경이 이미 패턴을 끝까지 따라 올라가므로, 매 발 킥은 힙보다 작게 두어 조준점이 과하게 흔들리지 않게 한다.
 	AltFire.CameraKick.PitchDegrees = 0.35f;
 	AltFire.CameraKick.YawDegrees = 0.08f;

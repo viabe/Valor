@@ -32,6 +32,36 @@ enum class EValorWallPenetrationTier : uint8
 	High
 };
 
+// 상점/무기 분류. valorant-api의 EEquippableCategory(Sidearm/SMG/Shotgun/Rifle/Sniper/Heavy)와 같은 구분이다.
+// 무기군마다 이동 오차·이동 속도 같은 공통 규칙이 묶여 있어, 나중에 상점 UI와 무기군 규칙 분기에 쓴다.
+UENUM(BlueprintType)
+enum class EValorWeaponCategory : uint8
+{
+	Sidearm,
+	SMG,
+	Shotgun,
+	Rifle,
+	Sniper,
+	Heavy
+};
+
+// 우클릭(Alternate Fire) 동작 종류. valorant-api의 EWeaponAltFireDisplayType과 같은 구분이다.
+UENUM(BlueprintType)
+enum class EValorAltFireType : uint8
+{
+	// 우클릭 없음: 프렌지, 고스트, 셰리프, 쇼티, 저지, 밴딧.
+	None,
+
+	// 정조준(줌): 대부분의 주무기. 불독·스팅어는 ADS에서 점사(BurstCount)로 바뀐다.
+	ADS,
+
+	// 클래식 우클릭: 3펠릿 산탄 점사(라이엇 데이터 분류가 "Shotgun"이다).
+	Shotgun,
+
+	// 버키 우클릭: 일정 거리(AirBurstDistanceCm)에서 터지며 산탄을 뿌리는 캐니스터.
+	AirBurst
+};
+
 UENUM(BlueprintType)
 enum class EValorHitZone : uint8
 {
@@ -93,9 +123,30 @@ struct FValorCameraKickConfig
 	float MaxKickDegrees = 3.0f;
 };
 
+// 이동 중 추가 탄퍼짐(도) 네 가지. 발사 모드 하나만 무기 공통 값과 다를 때(클래식 우클릭) 덮어쓰기용으로 쓴다.
+USTRUCT(BlueprintType)
+struct FValorMovementErrorValues
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float CrouchMovingError = 0.8f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float WalkingError = 3.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float RunningError = 6.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float AirborneError = 10.0f;
+};
+
 // 발사 모드 하나(힙파이어 = Primary Fire / 정조준 = Alternate Fire)의 수치.
 // 발로란트 무기 데이터가 weaponStats(힙)와 adsStats(정조준)를 나눠 두는 구조를 그대로 따른다.
 // 기본값은 밴달 힙파이어 값이며, ADS 값은 FValorWeaponConfig 생성자에서 채운다.
+// "[구현 예정]" 필드는 공식 수치를 미리 담아 두는 데이터 전용 필드다. 현재 사격 코드는 읽지 않으며(산탄·점사·가속),
+// 해당 총을 구현할 때 이 값을 그대로 쓰면 된다.
 USTRUCT(BlueprintType)
 struct FValorFireModeStats
 {
@@ -130,6 +181,53 @@ struct FValorFireModeStats
 	// 매 발 화면이 튀었다 돌아오는 카메라 킥(연출). 패턴 추종(CameraRecoilFollowRatio)과 더해져 최종 카메라 회전이 된다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode")
 	FValorCameraKickConfig CameraKick;
+
+	// 앉아서 멈춰 있을 때 이 모드의 탄퍼짐 배율. 위키 "Crouch primary/alt fire spread multiplier", 밴달 0.85.
+	// 모드마다 다를 수 있어(스팅어·불독: 힙 0.85 / ADS 0.75, 클래식: 좌클릭 0.75 / 우클릭 0.9) 무기 공통 값이 아니라 여기에 둔다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
+	float CrouchErrorMultiplier = 0.85f;
+
+	// 이 모드로 들고 있을 때 이동 속도 배율. valorant-api runSpeedMultiplier.
+	// 힙 = 칼(6.75m/s) 대비(밴달 0.8 → 5.4m/s), ADS = 그 무기 힙 이동 속도 대비(밴달 0.76 → 5.4 × 0.76 = 4.1m/s).
+	// ADS가 "힙 대비"라는 근거: 위키 표기 "Move Speed 76% (4.104 m/sec)", 2.03 패치 "마샬 줌 이동 속도: 줌 해제 속도의 76% → 90%".
+	// [구현 예정] 캐릭터 이동 속도에는 아직 반영하지 않는다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.1", ClampMax="1.0"))
+	float MoveSpeedMultiplier = 0.8f;
+
+	// 한 발(방아쇠 1회)에 나가는 산탄 수. 1 = 일반 탄. 저지 12, 버키 15, 쇼티 15, 클래식 우클릭 3, 버키 우클릭 5.
+	// 피해량 구간(DamageRanges)은 산탄 한 알 기준이다. [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="1"))
+	int32 PelletCount = 1;
+
+	// 한 발에 소모하는 탄약 수. 클래식 우클릭 = 3(탄창 12발 = 우클릭 4번). [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="1"))
+	int32 AmmoPerShot = 1;
+
+	// 점사 발 수(1 = 점사 아님). 불독 ADS 3, 스팅어 ADS 4. [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="1"))
+	int32 BurstCount = 1;
+
+	// 점사 안에서의 발사 속도(발/초). 불독 13.333, 스팅어 18. 0이면 점사가 아니다. [구현 예정]
+	// 점사 모드의 FireRate는 공식 표기대로 "평균" 속도다(불독 6.316, 스팅어 8.471).
+	// 점사 사이 대기 = BurstCount / FireRate - BurstCount / BurstFireRate → 불독 0.475 - 0.225, 스팅어 0.472 - 0.222, 둘 다 0.25초.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
+	float BurstFireRate = 0.0f;
+
+	// 계속 쏠수록 발사 속도가 오르는 무기(오딘 힙파이어 12 → 15.6). 0이면 가속 없음. FireRate가 시작 속도다. [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
+	float SpinUpMaxFireRate = 0.0f;
+
+	// FireRate → SpinUpMaxFireRate까지 오르는 데 걸리는 연사 시간(초). 공개 수치가 없어 오딘 값은 추정치다. [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
+	float SpinUpTimeSeconds = 0.0f;
+
+	// 이 모드만 이동 오차가 무기 공통 값(FValorMovementAccuracyProfile)과 다른 경우에 켠다.
+	// 공식 수치가 모드별로 다른 무기는 클래식뿐이다(좌클릭 0.5/1.1/2.3/7, 우클릭 0/0.6/1.5/2.25).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(InlineEditConditionToggle))
+	bool bOverrideMovementError = false;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(EditCondition="bOverrideMovementError"))
+	FValorMovementErrorValues MovementErrorOverride;
 };
 
 // 총기 하나의 반동/스프레이 정의(힙·ADS 공용). 발로란트의 "하이브리드" 반동 모델을 데이터로 표현한다.
@@ -232,18 +330,21 @@ struct FValorMovementAccuracyProfile
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
 	float JumpLandErrorDuration = 0.225f;
 
-	// 앉아서 멈춰 있을 때 탄퍼짐 배율. 위키: 밴달 crouch spread multiplier x0.85 (첫 발 0.25 → 0.21).
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
-	float CrouchErrorMultiplier = 0.85f;
+	// 앉아서 멈춰 있을 때의 탄퍼짐 배율은 발사 모드마다 다를 수 있어 FValorFireModeStats::CrouchErrorMultiplier에 둔다.
 
 	// 앉아서 멈춰 있을 때 반동 배율. 0.50: "Horizontal (Yaw) Recoil reduced by 15% while crouched and stationary".
 	// Riot: "Crouching while firing weapons will reduce recoil" → 수직에도 같은 배율을 적용한다(수직 값은 추정).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
 	float CrouchRecoilMultiplier = 0.85f;
 
-	// 달리며 쏠 때 수직 반동 배율. 6.11: 밴달 1.5 → 1.8. 걷기 속도부터 달리기 최고 속도까지 선형으로 커진다.
+	// 달리며 쏠 때 수직 반동 배율. 6.11: 밴달 1.5 → 1.8. 걷기 속도부터 달리기 최고 속도까지 선형으로 커진다(공중도 최대값).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="1.0"))
 	float RunningVerticalRecoilMultiplier = 1.8f;
+
+	// 달리며(점프·로프 포함) 쏠 때 수평 반동 배율. 4.0: 스펙터 "pitch and yaw recoil multipliers when running/jumping/on ascender
+	// 1.25 → 1.5" 이후 6.11에서 수직만 1.8로 올렸으므로 스펙터 수평은 1.5다. 밴달은 공개 수치가 없어 1(배율 없음)로 둔다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="1.0"))
+	float RunningHorizontalRecoilMultiplier = 1.0f;
 
 	// 탄퍼짐 중심 편향("Error Power", Riot 내부 명칭 Center Biasing). 반경 = 오차 × U^ErrorPower.
 	// 0.5면 원 안에 균일, 클수록 중앙에 몰린다. 6.11: 이동 중 편향을 크게 줄여 "거의 균일"하게 바꿨다.
@@ -308,6 +409,19 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	FText DisplayName;
 
+	// 상점/무기군 분류(valorant-api category).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
+	EValorWeaponCategory Category = EValorWeaponCategory::Rifle;
+
+	// 상점 가격(크레딧). valorant-api shopData.cost. [구현 예정] 상점/경제 시스템에서 사용.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0"))
+	int32 Cost = 2900;
+
+	// 무기를 꺼내 쏠 수 있을 때까지의 시간(초, "Normal" 장착 속도). valorant-api equipTimeSeconds. [구현 예정]
+	// 위키에는 Fast/Instant 장착 속도도 있으나 적용 조건이 공개돼 있지 않아 담지 않는다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
+	float EquipTimeSeconds = 1.0f;
+
 	// 애니메이션 레이어가 어떤 무기군 포즈를 써야 하는지 분류한다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	EValorWeaponAnimationType AnimationType = EValorWeaponAnimationType::Rifle;
@@ -337,15 +451,37 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
 	float ReloadDuration = 2.5f;
 
+	// 0보다 크면 탄창 교체가 아니라 한 발씩 장전한다(버키 0.5초/셸, 마샬 0.5초/발). ReloadDuration은 빈 탄창에서 가득 채우는 시간. [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
+	float ReloadPerRoundSeconds = 0.0f;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="100.0"))
 	float TraceDistanceCm = 50000.0f;
+
+	// 우클릭 동작 종류. ADS가 아닌 무기(None/Shotgun/AirBurst)는 줌이 없으므로 ADSZoomMultiplier = 1로 둔다.
+	// [구현 예정] 현재 입력은 우클릭을 모두 정조준으로 처리하므로, ADS가 없는 무기는 AltFire에 힙 수치를 복사해 둔다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
+	EValorAltFireType AltFireType = EValorAltFireType::ADS;
 
 	// ADS 배율. 밴달 1.25배 줌 → 힙 FOV에서 계산한다(고정 FOV 대신 배율을 저장해 FOV 설정이 바뀌어도 줌 비율 유지).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="1.0"))
 	float ADSZoomMultiplier = 1.25f;
 
+	// 2단 줌 배율(오퍼레이터 "Dual Zoom toggle between 2.5x and 5x"의 5배). 0이면 2단 줌 없음. [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
+	float SecondaryADSZoomMultiplier = 0.0f;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.1"))
 	float ADSInterpSpeed = 18.0f;
+
+	// 소음기(팬텀·고스트·스펙터). 위키: "Tracers not visible to enemies, Firing sound can't be heard at 40m+ except in direction of fire".
+	// [구현 예정] 적 시점 트레이서 숨김 + 원거리 발사음 감쇠.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
+	bool bSilenced = false;
+
+	// 버키 우클릭 캐니스터가 터지는 거리(cm). 공식 7.5m. 그 전에 맞으면 터지지 않고 펠릿 1알 피해만 준다. [구현 예정]
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
+	float AirBurstDistanceCm = 0.0f;
 
 	// Primary Fire(힙파이어) 수치.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
@@ -355,9 +491,17 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
 	FValorFireModeStats AltFire;
 
-	// 반동 패턴 + 회복 규칙(힙·ADS 공용).
+	// 반동 패턴 + 회복 규칙. 기본은 힙·ADS 공용이며, ADS는 AltFire.RecoilMultiplier만 곱한다(밴달·팬텀 방식).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
 	FValorRecoilProfile RecoilProfile;
+
+	// 우클릭이 힙파이어와 전혀 다른 발사 방식이라 반동/탄퍼짐 증가/회복 규칙을 따로 쓰는 무기만 켠다.
+	// 예) 클래식 우클릭: 연속 점사마다 탄퍼짐이 1.9 → 2.5 → 6.0으로 뛴다(2.0 패치). 스팅어 점사: 회복 0.4초(2.03 패치).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy", meta=(InlineEditConditionToggle))
+	bool bUseSeparateAltFireRecoil = false;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy", meta=(EditCondition="bUseSeparateAltFireRecoil"))
+	FValorRecoilProfile AltFireRecoilProfile;
 
 	// 자세/이동 정확도(무기군 공통 값).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
@@ -366,15 +510,19 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
 	FValorWeaponFXConfig Effects;
 
+	// 관통 가능한 벽 두께(cm)와 관통 후 피해 배율. 발로란트는 등급(Low/Medium/High)만 공개하므로 cm·배율은 프로젝트 규칙이다
+	// (Low 20cm ×0.5 / Medium 45cm ×0.7 / High 90cm ×0.8). 현재 판정은 Low 등급이면 관통하지 않는다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	float PenetrationDepthCm = 45.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	float PenetrationDamageMultiplier = 0.7f;
 
+	// 공식 벽 관통 등급(valorant-api wallPenetration).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	EValorWallPenetrationTier PenetrationTier = EValorWallPenetrationTier::Medium;
 
+	// 거리별 피해량(가까운 구간부터). 마지막 구간은 그 너머 전체에 적용된다(발로란트 표기의 "50m"는 표시 상한일 뿐 더 멀어도 같다).
 	// 밴달은 거리 감쇠가 없다(전 구간 머리 160 / 몸 40 / 다리 34). 생성자에서 한 구간으로 채운다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	TArray<FValorDamageRangeStep> DamageRanges;
@@ -388,4 +536,11 @@ class VALOR_API UValorWeaponDataAsset : public UPrimaryDataAsset
 public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	FValorWeaponConfig WeaponConfig;
+
+#if WITH_EDITORONLY_DATA
+	// 이 에셋 수치의 출처(공식/추정)와 구현 상태 메모. 에디터 전용이라 쿠킹된 게임/서버에는 들어가지 않는다.
+	// 왜: 영상 실측·패치노트·API에서 온 값과 추정값이 섞여 있으므로, 나중에 튜닝할 때 무엇을 믿어도 되는지 바로 보이게 한다.
+	UPROPERTY(EditAnywhere, Category="Valor|Weapon|Source", meta=(MultiLine="true"))
+	FString SourceNotes;
+#endif
 };

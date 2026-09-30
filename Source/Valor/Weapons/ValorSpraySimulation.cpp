@@ -22,6 +22,13 @@ namespace Private
 		return bIsADS ? Config.AltFire : Config.HipFire;
 	}
 
+	// 우클릭이 별도 반동 규칙을 쓰는 무기(클래식 우클릭, 스팅어 점사)만 ADS에서 AltFireRecoilProfile을 쓴다.
+	// 그 외(밴달·팬텀 등)는 힙과 같은 패턴에 AltFire.RecoilMultiplier만 곱한다.
+	const FValorRecoilProfile& GetRecoilProfile(const FValorWeaponConfig& Config, bool bIsADS)
+	{
+		return bIsADS && Config.bUseSeparateAltFireRecoil ? Config.AltFireRecoilProfile : Config.RecoilProfile;
+	}
+
 	struct FRecoveryInfo
 	{
 		// 0 = 아직 연사 중(회복 없음), 1 = 완전 회복(다음 발은 첫 발 취급).
@@ -148,14 +155,28 @@ namespace Private
 	};
 
 	// 자세 → 반동/탄퍼짐 배율. 발로란트 규칙:
-	//  - 이동 오차는 "더해진다"(additive). 속도가 데드존(최고 속도의 27.5%)을 넘으면 걷기/달리기 오차까지 선형으로 오른다.
-	//  - 앉아서 멈춰 있으면 탄퍼짐 ×0.85, 반동 ×0.85.
-	//  - 달리며 쏘면 수직 반동 최대 ×1.8(6.11).
+	//  - 이동 오차는 "더해진다"(additive). 속도가 데드존(최고 속도의 27.5%, 오퍼레이터 15%)을 넘으면 걷기/달리기 오차까지 선형으로 오른다.
+	//  - 앉아서 멈춰 있으면 탄퍼짐 × 발사 모드별 배율(밴달 0.85), 반동 × 무기별 배율(밴달 0.85).
+	//  - 달리며 쏘면 수직 반동 최대 ×1.8(6.11, 밴달·팬텀·스펙터), 수평은 무기별(스펙터 ×1.5).
 	//  - ADS 반동 배율은 앉기 배율과 곱해진다("multiplicative with crouch").
 	FStanceModifiers ComputeStanceModifiers(const FValorWeaponConfig& Config, const FValorShooterStance& Stance)
 	{
 		const FValorMovementAccuracyProfile& Accuracy = Config.MovementAccuracy;
 		const FValorFireModeStats& FireMode = GetFireMode(Config, Stance.bIsADS);
+
+		// 이동 오차 값: 보통은 무기 공통 값, 모드별 공식 수치가 따로 있는 경우(클래식 우클릭)만 모드 값.
+		FValorMovementErrorValues Errors;
+		if (FireMode.bOverrideMovementError)
+		{
+			Errors = FireMode.MovementErrorOverride;
+		}
+		else
+		{
+			Errors.CrouchMovingError = Accuracy.CrouchMovingError;
+			Errors.WalkingError = Accuracy.WalkingError;
+			Errors.RunningError = Accuracy.RunningError;
+			Errors.AirborneError = Accuracy.AirborneError;
+		}
 
 		FStanceModifiers Modifiers;
 		float MovingAlpha = 0.0f;
@@ -163,7 +184,7 @@ namespace Private
 
 		if (Stance.bIsAirborne)
 		{
-			Modifiers.MovementError = Accuracy.AirborneError;
+			Modifiers.MovementError = Errors.AirborneError;
 			MovingAlpha = 1.0f;
 			RunAlpha = 1.0f;
 		}
@@ -176,18 +197,18 @@ namespace Private
 				if (Stance.bIsCrouched)
 				{
 					MovingAlpha = FMath::Clamp((Speed - DeadzoneSpeed) / FMath::Max(Stance.CrouchSpeed - DeadzoneSpeed, 1.0f), 0.0f, 1.0f);
-					Modifiers.MovementError = Accuracy.CrouchMovingError * MovingAlpha;
+					Modifiers.MovementError = Errors.CrouchMovingError * MovingAlpha;
 				}
 				else if (Speed <= Stance.WalkSpeed)
 				{
 					MovingAlpha = FMath::Clamp((Speed - DeadzoneSpeed) / FMath::Max(Stance.WalkSpeed - DeadzoneSpeed, 1.0f), 0.0f, 1.0f);
-					Modifiers.MovementError = Accuracy.WalkingError * MovingAlpha;
+					Modifiers.MovementError = Errors.WalkingError * MovingAlpha;
 				}
 				else
 				{
 					MovingAlpha = 1.0f;
 					RunAlpha = FMath::Clamp((Speed - Stance.WalkSpeed) / FMath::Max(Stance.RunSpeed - Stance.WalkSpeed, 1.0f), 0.0f, 1.0f);
-					Modifiers.MovementError = FMath::Lerp(Accuracy.WalkingError, Accuracy.RunningError, RunAlpha);
+					Modifiers.MovementError = FMath::Lerp(Errors.WalkingError, Errors.RunningError, RunAlpha);
 				}
 			}
 
@@ -203,8 +224,8 @@ namespace Private
 		const float CrouchRecoil = bCrouchedAndStationary ? Accuracy.CrouchRecoilMultiplier : 1.0f;
 
 		Modifiers.PitchMultiplier = FireMode.RecoilMultiplier * CrouchRecoil * FMath::Lerp(1.0f, Accuracy.RunningVerticalRecoilMultiplier, RunAlpha);
-		Modifiers.YawMultiplier = FireMode.RecoilMultiplier * CrouchRecoil;
-		Modifiers.ErrorMultiplier = bCrouchedAndStationary ? Accuracy.CrouchErrorMultiplier : 1.0f;
+		Modifiers.YawMultiplier = FireMode.RecoilMultiplier * CrouchRecoil * FMath::Lerp(1.0f, Accuracy.RunningHorizontalRecoilMultiplier, RunAlpha);
+		Modifiers.ErrorMultiplier = bCrouchedAndStationary ? FireMode.CrouchErrorMultiplier : 1.0f;
 		Modifiers.ErrorPower = FMath::Lerp(Accuracy.StandingErrorPower, Accuracy.MovingErrorPower, MovingAlpha);
 		return Modifiers;
 	}
@@ -212,7 +233,7 @@ namespace Private
 	float EvaluateSprayError(const FValorWeaponConfig& Config, bool bIsADS, float SprayIndex)
 	{
 		const FValorFireModeStats& FireMode = GetFireMode(Config, bIsADS);
-		const float ErrorAlpha = FMath::Clamp(EvaluateCurve(Config.RecoilProfile.FiringErrorCurve, SprayIndex, 0.0f), 0.0f, 1.0f);
+		const float ErrorAlpha = FMath::Clamp(EvaluateCurve(GetRecoilProfile(Config, bIsADS).FiringErrorCurve, SprayIndex, 0.0f), 0.0f, 1.0f);
 		return FMath::Lerp(FireMode.FirstShotError, FireMode.MaxFiringError, ErrorAlpha);
 	}
 }
@@ -224,12 +245,12 @@ float GetFireInterval(const FValorWeaponConfig& Config, bool bIsADS)
 
 bool IsNewSpray(const FValorWeaponConfig& Config, bool bIsADS, const FValorSprayState& State, double ShotTime)
 {
-	return Private::ComputeRecovery(Config.RecoilProfile, State, GetFireInterval(Config, bIsADS), ShotTime).Alpha >= 1.0f;
+	return Private::ComputeRecovery(Private::GetRecoilProfile(Config, bIsADS), State, GetFireInterval(Config, bIsADS), ShotTime).Alpha >= 1.0f;
 }
 
 FValorSprayEvaluation Evaluate(const FValorWeaponConfig& Config, const FValorShooterStance& Stance, const FValorSprayState& State, double Now)
 {
-	const FValorRecoilProfile& Profile = Config.RecoilProfile;
+	const FValorRecoilProfile& Profile = Private::GetRecoilProfile(Config, Stance.bIsADS);
 	const Private::FRecoveryInfo Recovery = Private::ComputeRecovery(Profile, State, GetFireInterval(Config, Stance.bIsADS), Now);
 
 	float SprayIndex = 0.0f;
@@ -252,7 +273,7 @@ FValorSprayEvaluation Evaluate(const FValorWeaponConfig& Config, const FValorSho
 
 FValorComputedShotData AdvanceShot(const FValorWeaponConfig& Config, const FValorShooterStance& Stance, FValorSprayState& State, double ShotTime, int32 ShotSeed)
 {
-	const FValorRecoilProfile& Profile = Config.RecoilProfile;
+	const FValorRecoilProfile& Profile = Private::GetRecoilProfile(Config, Stance.bIsADS);
 	const Private::FRecoveryInfo Recovery = Private::ComputeRecovery(Profile, State, GetFireInterval(Config, Stance.bIsADS), ShotTime);
 
 	float SprayIndex = 0.0f;

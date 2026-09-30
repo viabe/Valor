@@ -108,6 +108,7 @@
 | `Components/ValorCameraKickSpring.h` | 카메라 킥용 임계 감쇠 스프링(해석해 적분, 프레임레이트 무관) |
 | `UI/ValorHUD.h/.cpp` | 발로란트식 크로스헤어 + Firing/Movement Error 표시 + 반동 디버그 |
 | `Tests/ValorSpraySimulationTests.cpp` | 자동화 테스트 7개(결정성, 패턴, 회복, 탭 효율, 자세 배율, 수평 반동, 카메라 킥) |
+| `ValorEditor` 모듈(에디터 전용) | 무기 20종 프리셋 + 데이터 에셋 생성 커맨드렛 + 프리셋/에셋 테스트 4개 — [Weapons.md](Weapons.md) |
 
 ### 사격 네트워크 흐름
 ```
@@ -171,6 +172,7 @@
 | 매 발 화면이 튀는 세기/속도 | Hip Fire / Alt Fire → Camera Kick → Pitch/Yaw/Roll Degrees, Peak Time Seconds |
 | 반동 전체 크기(탄 패턴 + 카메라) | Hip Fire / Alt Fire → Recoil Multiplier |
 | 탄퍼짐 크기 | Hip/Alt Fire → First Shot Error / Max Firing Error, Firing Error Curve |
+| 앉아서 멈췄을 때 탄퍼짐 감소 | Hip/Alt Fire → Crouch Error Multiplier (모드별, 밴달 0.85) |
 | 카메라 복귀 부드러움 | 캐릭터 → Camera Logic Component → Recoil Camera Return Interp Speed |
 
 **추정치(공개 수치 없음):**
