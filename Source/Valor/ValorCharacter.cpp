@@ -316,6 +316,16 @@ UAbilitySystemComponent* AValorCharacter::GetAbilitySystemComponent() const
 	return AbilitySystemComponent;
 }
 
+void AValorCharacter::Landed(const FHitResult& Hit)
+{
+	Super::Landed(Hit);
+
+	if (const UWorld* World = GetWorld())
+	{
+		LastLandedWorldTime = World->GetTimeSeconds();
+	}
+}
+
 bool AValorCharacter::IsAlive() const
 {
 	return CombatAttributeSet && CombatAttributeSet->GetHealth() > 0.0f;

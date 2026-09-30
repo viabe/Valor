@@ -2,10 +2,27 @@
 
 #include "Animation/ValorAnimTypes.h"
 #include "CoreMinimal.h"
+#include "Curves/CurveFloat.h"
 #include "Engine/DataAsset.h"
 #include "ValorWeaponDataAsset.generated.h"
 
 class UAnimMontage;
+class UMaterialInterface;
+class UNiagaraSystem;
+class USoundBase;
+
+// =====================================================================================================
+// 발로란트식 무기 데이터 설계
+// - 왜: 발로란트는 총을 "Equippable" 단위의 PrimaryDataAsset(밴달 = ShooterGame/.../AK/AKPrimaryAsset)으로
+//   관리하고, 반동/탄퍼짐을 디자이너 용어(Gun Recovery Time, Tap Efficiency, Firing Error 커브, Error Power,
+//   Protected bullet count, Yaw switch time/chance, Vertical(Pitch) recoil curve)로 튜닝한다. 이 이름들은
+//   공식 패치노트(0.50, 2.02, 6.11, 9.10, 11.08)에 그대로 등장하므로, 같은 이름·같은 단위(도/초/발)로 필드를
+//   두면 패치노트 수치를 그대로 옮겨 적고 비교할 수 있다.
+// - 네트워크: 이 데이터는 복제하지 않는다. 서버와 클라가 같은 에셋을 로드하므로 "같은 입력 → 같은 결과"라는
+//   결정적 시뮬레이션의 기반이 되고, 런타임 상태(스프레이 진행도 등)만 무기 액터가 따로 들고 있다.
+// - 트레이드오프: 수치를 에셋에 두면 코드 수정 없이 튜닝할 수 있지만, 서버/클라가 서로 다른 에셋 버전을 쓰면
+//   예측이 어긋난다(배포 파이프라인에서 버전을 맞춰야 함).
+// =====================================================================================================
 
 UENUM(BlueprintType)
 enum class EValorWallPenetrationTier : uint8
@@ -42,86 +59,251 @@ struct FValorDamageRangeStep
 	float LegDamage = 34.0f;
 };
 
-// 스프레이 패턴의 "한 발"을 나타낸다. 발로란트처럼 총기별 반동을 데이터로 정의하기 위한 최소 단위다.
-// PitchKick(+)는 화면을 위로, YawKick(+)는 화면을 오른쪽으로 밀어내는 카메라 킥(도 단위)이다.
+// 발사할 때마다 화면이 위로 톡 튀었다가 곧바로 가라앉는 "카메라 킥"(패턴 추종 위에 더해지는 톱니 모양 성분).
+// 근거: 실제 발로란트 밴달 무보정 연사 영상의 프레임별 카메라 회전량 측정(2026-09-29, Docs/VandalRecoil.md) —
+//   패턴을 따라 올라간 높이(약 4.2°) 위에서 매 발 약 0.8~0.9° 튀고, 다음 발(0.1초) 전에 거의 다 가라앉는 톱니가 반복됐다.
+// 네트워크: 소유 클라의 카메라에만 적용되는 순수 연출이다. 컨트롤 회전(조준)과 서버 탄도는 건드리지 않는다.
 USTRUCT(BlueprintType)
-struct FValorRecoilStep
+struct FValorCameraKickConfig
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float PitchKick = 0.8f;
+	// 한 발당 위로 튀는 크기(도, 최고점 기준). 실제 값은 [값×(1-PitchVariance), 값] 사이에서 무작위.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|CameraKick", meta=(ClampMin="0.0"))
+	float PitchDegrees = 0.8f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float YawKick = 0.0f;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|CameraKick", meta=(ClampMin="0.0", ClampMax="1.0"))
+	float PitchVariance = 0.2f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float AdditionalSpread = 0.0f;
+	// 좌우 무작위 흔들림 최대(±도). 영상에서는 발마다의 좌우 튐이 거의 보이지 않아 작게 둔다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|CameraKick", meta=(ClampMin="0.0"))
+	float YawDegrees = 0.15f;
+
+	// 화면 기울어짐(롤) 무작위 최대(±도). 발로란트 영상에서는 롤 흔들림이 두드러지지 않아 기본 0.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|CameraKick", meta=(ClampMin="0.0"))
+	float RollDegrees = 0.0f;
+
+	// 킥이 최고점에 도달하는 시간(초). 임계 감쇠 스프링의 반응 속도로, 작을수록 날카롭게 튀고 빨리 돌아온다.
+	// 0.025초면 한 프레임 안에 튀고, 다음 발(0.1초) 직전에는 약 20%만 남는다 — 영상에서 측정한 톱니 모양과 같다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|CameraKick", meta=(ClampMin="0.005"))
+	float PeakTimeSeconds = 0.025f;
+
+	// 연사 중 누적될 수 있는 킥의 최대치(도).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|CameraKick", meta=(ClampMin="0.0"))
+	float MaxKickDegrees = 3.0f;
 };
 
-// 총기 하나의 "스프레이/반동" 전체를 정의하는 프로파일이다.
-// 설계 의도: 발로란트는 (1) 앞쪽 탄들은 정해진 결정적 패턴을 따르고, (2) 패턴을 다 쓰면 랜덤 구간으로 넘어가며,
-//           (3) 사격을 멈추면 카메라가 원래 조준점으로 되돌아오는 "회복(Recovery)"을 가진다.
-// 이 세 가지를 모두 데이터로 분리해 두면, 나중에 팬텀/스펙터/오딘 등 다른 총을 추가할 때
-// 이 구조체만 채워 넣으면 되므로 확장이 쉬워진다(총기 코드 수정 불필요).
+// 발사 모드 하나(힙파이어 = Primary Fire / 정조준 = Alternate Fire)의 수치.
+// 발로란트 무기 데이터가 weaponStats(힙)와 adsStats(정조준)를 나눠 두는 구조를 그대로 따른다.
+// 기본값은 밴달 힙파이어 값이며, ADS 값은 FValorWeaponConfig 생성자에서 채운다.
 USTRUCT(BlueprintType)
-struct FValorRecoilProfile
+struct FValorFireModeStats
 {
 	GENERATED_BODY()
 
-	// 결정적 스프레이 패턴이다. 인덱스 = 발사 순서(0부터), 값 = 그 탄에서 화면에 더해지는 카메라 킥이다.
-	// 비워두면(0개) 코드에 내장된 기본 밴달 패턴을 사용하므로, 데이터 자산을 따로 채우지 않아도 동작한다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
-	TArray<FValorRecoilStep> Pattern;
+	// 초당 발사 수. 밴달: 힙 9.75, ADS 8.775(90%). 서버는 이 값으로 발사 간격(연사 속도)을 검증한다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.1"))
+	float FireRate = 9.75f;
 
-	// 결정적 패턴을 모두 소진한 뒤(탄창이 길어 연사가 계속될 때) 사용할 랜덤 반동 범위다.
-	// 발로란트도 패턴 후반부는 좌우로 랜덤하게 흔들린다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
-	float SustainedPitchMin = 0.10f;
+	// 첫 발 탄퍼짐 반경(도). 밴달: 힙 0.25, ADS 0.1575 ("1st Shot Spread").
+	// 반동이 아니라 "무작위 오차"이므로 첫 발도 크로스헤어에서 이만큼 벗어날 수 있다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
+	float FirstShotError = 0.25f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
-	float SustainedPitchMax = 0.25f;
+	// 연사로 도달하는 최대 탄퍼짐 반경(도). 밴달: 힙 1.0, ADS 1.02 ("Max Spread").
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
+	float MaxFiringError = 1.0f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
-	float SustainedYawMin = -0.6f;
+	// 반동(수직·수평) 전체 배율. Riot: "ADS will also reduce recoil (this is multiplicative with crouch)".
+	// 위키 표기는 "Slight spread and recoil reduction"뿐이라 ADS 값(0.9)은 추정치다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
+	float RecoilMultiplier = 1.0f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
-	float SustainedYawMax = 0.6f;
+	// 카메라(= 화면 중앙 크로스헤어)가 "스프레이 패턴"을 따라가는 비율(0~1).
+	// 발로란트 힙파이어는 약 0.5: 실제 무보정 연사 영상 2개를 프레임 단위로 측정하니 탄은 조준점 위 약 8.5°까지 가는데
+	//   카메라는 약 4.2~4.9°만 올라갔다 → 화면이 반쯤 따라 올라가고 탄은 크로스헤어보다 더 위에 맞는다
+	//   ("크로스헤어가 스프레이를 그대로 따라가지는 않는다"는 커뮤니티 설명과도 맞다).
+	// ADS는 1: 위키 표기 "Crosshair follows recoil" — 조준경이 반동을 따라 올라가 탄이 조준점에 맺힌다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0", ClampMax="1.0"))
+	float CameraRecoilFollowRatio = 0.5f;
 
-	// === 시각적 반동(뷰 펀치) — 연출 전용 ===
-	// 발로란트의 화면 반동 재현: 연사 중에는 화면이 반동 패턴을 따라 '누적'으로 밀려 올라가고(발사 사이
-	// 감쇠 없음), 사격을 멈추면 짧은 지연 후 원래 조준점으로 부드럽게 복귀한다(리코일 회복).
-	// 탄도(위 Pattern)와 연출이 같은 패턴을 공유하므로, 스케일 1.0이면 연사 중 탄이 대략 크로스헤어
-	// 위치에 맺힌다 → "밀려 올라가는 크로스헤어를 마우스로 끌어내려 타겟에 붙잡아 두는" 발로란트식
-	// 반동 컨트롤이 성립한다. FollowCamera의 상대 회전에만 적용되므로 조준(컨트롤 회전)과 서버 탄도에는
-	// 전혀 영향이 없다.
-
-	// 이번 발 패턴 증분 × 이 배율 = 화면 킥 증가량. 1.0 = 화면이 패턴을 그대로 따라감(권장).
-	// 낮추면 화면 상승이 탄착보다 작아져 탄이 크로스헤어 위쪽에 맺히고(CS 느낌), 0이면 화면 고정.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil|ViewPunch", meta=(ClampMin="0.0"))
-	float ViewPunchScale = 1.0f;
-
-	// 마지막 발사 후 복귀를 시작하기까지의 대기 시간(초). 연사 간격(TimeBetweenShots)보다 길어야
-	// 연사 도중에 화면이 도로 내려가지 않고 패턴 위치를 유지한다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil|ViewPunch", meta=(ClampMin="0.0"))
-	float ViewPunchRecoveryDelaySeconds = 0.15f;
-
-	// 원위치 복귀 속도. 클수록 빠릿하게, 작을수록 부드럽게 되돌아온다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil|ViewPunch", meta=(ClampMin="0.1"))
-	float ViewPunchRecoverySpeed = 10.0f;
-
-	// 화면 킥 누적 상한(도). 밴달 패턴 총 상승(약 10.5도)을 온전히 담도록 여유 있게 잡는다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil|ViewPunch", meta=(ClampMin="0.0"))
-	float ViewPunchMaxDegrees = 12.0f;
+	// 매 발 화면이 튀었다 돌아오는 카메라 킥(연출). 패턴 추종(CameraRecoilFollowRatio)과 더해져 최종 카메라 회전이 된다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode")
+	FValorCameraKickConfig CameraKick;
 };
 
+// 총기 하나의 반동/스프레이 정의(힙·ADS 공용). 발로란트의 "하이브리드" 반동 모델을 데이터로 표현한다.
+// 수치 근거: Riot 패치노트(구조 파라미터) + 실제 게임 영상의 프레임 단위 측정(크기) — Docs/VandalRecoil.md 참고.
+// Riot 개발자(2020): "The first several bullets have fully deterministic recoil, but deeper into the spray,
+//                    your weapon will make pseudo-random deviations."
+// → (1) 보호 탄 구간: 수직 커브만 따르는 완전 결정적 반동
+//   (2) 그 이후: 수평 드리프트가 무작위로 한쪽을 고르고, 매 발 확률적으로 반대편으로 넘어간다(시드 기반 의사난수).
 USTRUCT(BlueprintType)
-struct FValorWeaponConfig
+struct VALOR_API FValorRecoilProfile
 {
 	GENERATED_BODY()
 
+	// 생성자에서 밴달 기본 커브 키를 채운다(에셋을 비워 둬도 밴달이 동작하도록).
+	FValorRecoilProfile();
+
+	// 수직(Pitch) 반동 커브. X = 스프레이 진행도(발 단위, 소수 허용), Y = 누적 수직 반동(도).
+	// 11.08 패치노트의 "Vertical (Pitch) recoil curve ... (total recoil unchanged)" 개념: 커브 모양과 총량으로 정의한다.
+	// 밴달 기본값(실제 게임 영상 측정): 약 8발 만에 약 7.9°까지 거의 직선으로 오르고, 이후 약 8.7~8.9°에서 멈춘다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
+	FRuntimeFloatCurve VerticalRecoilCurve;
+
+	// 수평(Yaw) 반동 진폭 커브. X = 스프레이 진행도, Y = 그 시점에 총구가 한쪽으로 벌어질 수 있는 최대 폭(도).
+	// 보호 탄 이후 무작위로 고른 쪽(YawSide)의 이 폭을 목표로, "Yaw Switch Time에 한쪽 끝에서 반대쪽 끝까지 가는 속도"로 이동한다.
+	// 밴달 기본값(영상 측정): 6발째부터 벌어지기 시작해 약 12발째 ±2.4°, 이후 ±2.8°까지.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
+	FRuntimeFloatCurve HorizontalRecoilAmplitudeCurve;
+
+	// 탄퍼짐 증가 커브. X = 스프레이 진행도, Y = 0~1 (FirstShotError → MaxFiringError 보간 비율).
+	// 0.50 패치노트: "Firing Error (this value is a curve that has intermediate values between each bullet)".
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil")
+	FRuntimeFloatCurve FiringErrorCurve;
+
+	// 보호 탄 수: 이 발 수까지는 수평 방향 전환(Yaw switch)이 일어나지 않는다. 11.08(PC): 밴달 4 → 6.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil", meta=(ClampMin="0"))
+	int32 ProtectedBulletCount = 6;
+
+	// 보호 탄 이후 매 발마다 수평 반동이 반대편으로 넘어갈 확률. 11.08(PC): 6% → 10%.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil", meta=(ClampMin="0.0", ClampMax="1.0"))
+	float YawSwitchChance = 0.10f;
+
+	// 수평 반동이 한쪽에서 반대쪽으로 완전히 넘어가는 데 걸리는 시간(초). 11.08(PC): 0.37s → 0.6s.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil", meta=(ClampMin="0.01"))
+	float YawSwitchTime = 0.6f;
+
+	// 수평 반동 절대 상한(도). 진폭 커브를 잘못 입력해도 탄이 비현실적으로 벌어지지 않게 막는 안전장치.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil", meta=(ClampMin="0.0"))
+	float MaxHorizontalRecoil = 3.5f;
+
+	// 사격을 멈춘 뒤 반동/탄퍼짐이 첫 발 상태로 완전히 돌아오는 시간(초). 0.50: 밴달 0.4 → 0.375.
+	// 0.50 패치노트: "Inaccuracy is accrued any time the weapon is re-fired prior to a complete duration of Gun Recovery Time."
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil", meta=(ClampMin="0.01"))
+	float GunRecoveryTime = 0.375f;
+
+	// 회복이 끝나기 전에 다시 쏠 때 부정확도(스프레이 진행도)가 쌓이는 속도를 낮추는 값. 0.50: 밴달 4 → 6.
+	// "The higher the Tap Efficiency, the lower the rate of inaccuracy accrual."
+	// 구현: 풀오토 간격이면 1발씩, 회복 직전에 다시 쏘면 1/TapEfficiency발만큼만 진행도가 오른다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil", meta=(ClampMin="1.0"))
+	float TapEfficiency = 6.0f;
+
+	// 연사 판정 여유 배율: 마지막 발 후 (발사 간격 × 이 값)까지는 회복을 시작하지 않는다.
+	// 왜: 발사 시각을 이상적인 연사 간격으로 보정하더라도 네트워크/프레임 오차 몇 ms에 풀오토가 "중간에 회복"되지 않게 하기 위함.
+	// 영상에서 카메라는 마지막 발 직후부터 곧바로 내려오기 시작하므로 여유는 짧게(10%) 둔다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Recoil", meta=(ClampMin="1.0"))
+	float RecoveryGraceMultiplier = 1.1f;
+};
+
+// 자세/이동에 따른 정확도(무기군 공통). 발로란트는 이동 페널티를 무기군(라이플 등)끼리 공유한다.
+// 모든 기본값은 라이플 기준 공식 패치노트/위키 값이다.
+USTRUCT(BlueprintType)
+struct FValorMovementAccuracyProfile
+{
+	GENERATED_BODY()
+
+	// 이 속도 비율(달리기 최고 속도 대비) 이하이면 "멈춘 것"으로 보고 이동 페널티를 주지 않는다(카운터 스트레이프 허용).
+	// 0.50: 25% → 30%, 이후 27.5%.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0", ClampMax="1.0"))
+	float DeadzoneSpeedRatio = 0.275f;
+
+	// 앉아서 이동 중 추가 탄퍼짐(도). 2.02: 0.3 → 0.8.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float CrouchMovingError = 0.8f;
+
+	// 걷는 중 추가 탄퍼짐(도). 9.10: 2 → 3.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float WalkingError = 3.0f;
+
+	// 달리는 중 추가 탄퍼짐(도). 9.10: 5 → 6.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float RunningError = 6.0f;
+
+	// 공중 추가 탄퍼짐(도). 위키 라이플 Airborne +10.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float AirborneError = 10.0f;
+
+	// 착지 직후 추가 탄퍼짐(도)과 지속 시간(초). 1.09: 5.0 → 7.0, 0.2s → 0.225s(점진 → 즉시 해제 방식).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float JumpLandError = 7.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float JumpLandErrorDuration = 0.225f;
+
+	// 앉아서 멈춰 있을 때 탄퍼짐 배율. 위키: 밴달 crouch spread multiplier x0.85 (첫 발 0.25 → 0.21).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float CrouchErrorMultiplier = 0.85f;
+
+	// 앉아서 멈춰 있을 때 반동 배율. 0.50: "Horizontal (Yaw) Recoil reduced by 15% while crouched and stationary".
+	// Riot: "Crouching while firing weapons will reduce recoil" → 수직에도 같은 배율을 적용한다(수직 값은 추정).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.0"))
+	float CrouchRecoilMultiplier = 0.85f;
+
+	// 달리며 쏠 때 수직 반동 배율. 6.11: 밴달 1.5 → 1.8. 걷기 속도부터 달리기 최고 속도까지 선형으로 커진다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="1.0"))
+	float RunningVerticalRecoilMultiplier = 1.8f;
+
+	// 탄퍼짐 중심 편향("Error Power", Riot 내부 명칭 Center Biasing). 반경 = 오차 × U^ErrorPower.
+	// 0.5면 원 안에 균일, 클수록 중앙에 몰린다. 6.11: 이동 중 편향을 크게 줄여 "거의 균일"하게 바꿨다.
+	// 정지 값(1.0)은 공개 수치가 없어 추정치다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.1"))
+	float StandingErrorPower = 1.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Accuracy", meta=(ClampMin="0.1"))
+	float MovingErrorPower = 0.5f;
+};
+
+// 발사 연출(로컬 전용). 게임플레이 판정과 무관하므로 서버(데디케이티드)에서는 전혀 쓰지 않는다.
+// 에셋을 비워 두면 개발 빌드에서 디버그 선/점으로 대체 표시한다(Valor.Debug.DrawShots).
+USTRUCT(BlueprintType)
+struct FValorWeaponFXConfig
+{
+	GENERATED_BODY()
+
+	// 트레이서/총구 화염이 나가는 소켓(또는 본) 이름. Araxys 밴달 메시는 "Muzzle" 본을 가진다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	FName MuzzleSocketName = TEXT("Muzzle");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	TObjectPtr<UNiagaraSystem> MuzzleFlashFX = nullptr;
+
+	// 총구 → 탄착점으로 이어지는 트레이서. 끝점은 아래 User 파라미터(Vector)로 넘긴다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	TObjectPtr<UNiagaraSystem> TracerFX = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	FName TracerEndParameterName = TEXT("BeamEnd");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	TObjectPtr<UNiagaraSystem> ImpactFX = nullptr;
+
+	// 벽 탄흔 데칼. 발로란트처럼 스프레이 모양을 벽에서 읽을 수 있게 해 주는 핵심 피드백이다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	TObjectPtr<UMaterialInterface> ImpactDecalMaterial = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	FVector ImpactDecalSize = FVector(4.0f, 5.0f, 5.0f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX", meta=(ClampMin="0.0"))
+	float ImpactDecalLifeSpan = 6.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	TObjectPtr<USoundBase> FireSound = nullptr;
+};
+
+// 무기 1종의 전체 정의. 구조체 기본값 = 밴달이므로, 데이터 자산이 없거나 비어 있어도 밴달로 동작한다.
+USTRUCT(BlueprintType)
+struct VALOR_API FValorWeaponConfig
+{
+	GENERATED_BODY()
+
+	// ADS 수치와 피해량 구간처럼 한 줄 기본값으로 표현하기 어려운 밴달 값을 채운다.
+	FValorWeaponConfig();
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	FName WeaponId = TEXT("Rifle_Default");
+	FName WeaponId = TEXT("Vandal");
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	FText DisplayName;
@@ -145,59 +327,44 @@ struct FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	bool bAutomatic = true;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="1"))
 	int32 MagazineSize = 25;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	int32 MaxReserveAmmo = 75;
+	// 밴달 예비 탄약: 6.11에서 75 → 50.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0"))
+	int32 MaxReserveAmmo = 50;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float TimeBetweenShots = 0.1f;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
+	float ReloadDuration = 2.5f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float ReloadDuration = 1.9f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="100.0"))
 	float TraceDistanceCm = 50000.0f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float ADSFieldOfView = 82.0f;
+	// ADS 배율. 밴달 1.25배 줌 → 힙 FOV에서 계산한다(고정 FOV 대신 배율을 저장해 FOV 설정이 바뀌어도 줌 비율 유지).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="1.0"))
+	float ADSZoomMultiplier = 1.25f;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.1"))
 	float ADSInterpSpeed = 18.0f;
 
-	// 발로란트처럼 서서 쏘는 첫 발은 조준점에 정확히 맞도록 0으로 둔다(랜덤 스프레드 없음).
-	// 스프레이의 모양은 결정적 반동 패턴(RecoilProfile)이 그리고, 아래 랜덤 스프레드는 후반부에 아주 약간의
-	// 흔들림만 더한다. 값을 키우면 패턴이 흐려지고, 줄이면 더 결정적(학습 가능)으로 또렷해진다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float BaseFirstShotSpreadDegrees = 0.0f;
+	// Primary Fire(힙파이어) 수치.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
+	FValorFireModeStats HipFire;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float AdditionalSpreadPerShotDegrees = 0.06f;
+	// Alternate Fire(ADS) 수치.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
+	FValorFireModeStats AltFire;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float MaxSpreadDegrees = 4.5f;
+	// 반동 패턴 + 회복 규칙(힙·ADS 공용).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
+	FValorRecoilProfile RecoilProfile;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float SpreadRecoveryDelay = 0.18f;
+	// 자세/이동 정확도(무기군 공통 값).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Accuracy")
+	FValorMovementAccuracyProfile MovementAccuracy;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float MovementSpreadDegrees = 2.2f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float WalkingSpreadDegrees = 0.85f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float CrouchSpreadMultiplier = 0.75f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float ADSSpreadMultiplier = 0.65f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float CrouchRecoilMultiplier = 0.85f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	float ADSRecoilMultiplier = 0.8f;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
+	FValorWeaponFXConfig Effects;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	float PenetrationDepthCm = 45.0f;
@@ -208,10 +375,7 @@ struct FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	EValorWallPenetrationTier PenetrationTier = EValorWallPenetrationTier::Medium;
 
-	// 총기별 스프레이/반동 전체 정의다. 발로란트식 결정적 패턴 + 회복을 한곳에 모아 확장성을 확보한다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
-	FValorRecoilProfile RecoilProfile;
-
+	// 밴달은 거리 감쇠가 없다(전 구간 머리 160 / 몸 40 / 다리 34). 생성자에서 한 구간으로 채운다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	TArray<FValorDamageRangeStep> DamageRanges;
 };

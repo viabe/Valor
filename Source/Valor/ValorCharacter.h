@@ -159,6 +159,17 @@ public:
 	bool IsWalkInputActive() const { return bWantsToWalk; }
 	FName GetAnimationProfileName() const { return AnimationProfileName; }
 
+	// 사격 정확도(이동 오차) 계산이 "걷기/달리기/앉기 최고 속도 대비 현재 속도"로 상태를 판정할 수 있게 노출한다.
+	float GetWalkSpeed() const { return WalkSpeed; }
+	float GetRunSpeed() const { return RunSpeed; }
+	float GetCrouchSpeed() const { return CrouchSpeed; }
+
+	// 마지막 착지 시각(로컬 월드 시간). 착지 직후 탄퍼짐 페널티(발로란트 Jump land inaccuracy)에 쓴다.
+	double GetLastLandedWorldTime() const { return LastLandedWorldTime; }
+
+	// 착지 시각 기록. CharacterMovementComponent가 서버와 소유 클라 양쪽에서 각자 호출하므로 복제가 필요 없다.
+	virtual void Landed(const FHitResult& Hit) override;
+
 	// IValorWeaponOwnerInterface
 	virtual USceneComponent* GetWeaponAttachComponent() const override;
 	virtual FName GetWeaponAttachSocketName() const override;
@@ -233,4 +244,7 @@ private:
 
 	// 앉기 홀드 입력의 현재 의도값이다.
 	bool bWantsToCrouch = false;
+
+	// 마지막 착지 시각. 시작 시에는 "오래전에 착지함"으로 두어 착지 페널티가 걸리지 않게 한다.
+	double LastLandedWorldTime = -1000.0;
 };

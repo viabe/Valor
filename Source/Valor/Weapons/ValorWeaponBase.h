@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Weapons/Data/ValorWeaponDataAsset.h"
+#include "Weapons/ValorWeaponTypes.h"
 #include "ValorWeaponBase.generated.h"
 
 class AValorCharacter;
@@ -11,37 +12,20 @@ class USkeletalMeshComponent;
 class USceneComponent;
 class UValorWeaponDataAsset;
 
-USTRUCT()
-struct FValorComputedShotData
-{
-	GENERATED_BODY()
-
-	UPROPERTY()
-	int32 ShotIndex = 0;
-
-	UPROPERTY()
-	float SpreadAngleDegrees = 0.0f;
-
-	// 결정적 반동 패턴을 '탄착 오프셋'으로 적용하기 위한 누적 각도(도). 카메라가 아니라 탄 방향에 더해진다.
-	// 발로란트처럼 조준점(시야)은 고정되고, 탄이 조준점 대비 위(+Pitch)/오른쪽(+Yaw)으로 이만큼 벌어진다.
-	UPROPERTY()
-	float RecoilPitchDegrees = 0.0f;
-
-	UPROPERTY()
-	float RecoilYawDegrees = 0.0f;
-
-	// 이번 발의 반동 '증분'(도). 탄도에는 이미 위 누적값으로 반영됐고, 이 값은 화면에 짧게 튀는
-	// 시각적 뷰 펀치(카메라 연출)의 크기를 정하는 데만 쓰인다.
-	UPROPERTY()
-	float RecoilStepPitchDegrees = 0.0f;
-
-	UPROPERTY()
-	float RecoilStepYawDegrees = 0.0f;
-
-	UPROPERTY()
-	uint32 RandomSeed = 0;
-};
-
+/**
+ * 총기 액터(발로란트의 Equippable에 해당).
+ *
+ * 책임: 무기 데이터(PrimaryDataAsset) 보관, 탄약(서버 권위·복제), 스프레이 상태(반동/탄퍼짐) 보관과 계산 위임,
+ *       발사 연출(트레이서/탄흔/총구 화염) 재생. 입력 처리·검증·피격 판정은 UValorCombatComponent가 맡는다.
+ *
+ * 네트워크:
+ *  - 탄약은 서버만 바꾸고 복제한다.
+ *  - 스프레이 상태는 복제하지 않는다. 서버 인스턴스(권위)와 소유 클라 인스턴스(예측)가 같은 발사 요청을 같은 순서로
+ *    처리해 각자 같은 값을 계산한다(ValorSpray 결정적 시뮬레이션).
+ *  - 예측 난수가 서버와 같아지도록 무기 시드(RecoilSeed)와 서버 누적 발사 수(ServerShotCount)만 소유자에게 복제한다.
+ * 트레이드오프: 소유 클라가 시드를 알기 때문에 "탄퍼짐 예측 핵"이 이론상 가능하다. 발로란트도 클라 예측과 서버 판정의
+ *   일치를 택했고(넷코드 블로그), 이는 안티치트(Vanguard) 영역으로 분리한다.
+ */
 UCLASS()
 class VALOR_API AValorWeaponBase : public AActor
 {
@@ -58,17 +42,49 @@ public:
 
 	const FValorWeaponConfig& GetWeaponConfig() const;
 
-	bool CanFire(float ServerWorldTimeSeconds) const;
-	bool PrepareAndConsumeShot(float ServerWorldTimeSeconds, bool bIsADS, float MovementAlpha, bool bIsWalking, bool bIsCrouched, FValorComputedShotData& OutShotData);
+	// === 사격(결정적 시뮬레이션) ===
+
+	// 한 발을 계산하고 스프레이 상태를 한 발 전진시킨다. 서버(권위)와 소유 클라(예측)가 같은 입력으로 호출한다.
+	FValorComputedShotData SimulateShot(double ShotTime, const FValorShooterStance& Stance);
+
+	// 상태를 바꾸지 않는 "지금 쏜다면" 평가. ADS 카메라와 크로스헤어가 매 프레임 읽는다(로컬 전용).
+	FValorSprayEvaluation EvaluateSpray(double Now, const FValorShooterStance& Stance) const;
+
+	// 조준 방향 + 반동 + 탄퍼짐 샘플 → 최종 탄 방향.
+	FVector ComputeShotDirection(const FRotator& AimRotation, const FValorComputedShotData& ShotData) const;
+
+	float GetFireInterval(bool bIsADS) const;
+	float GetCameraRecoilFollowRatio(bool bIsADS) const;
+	const FValorCameraKickConfig& GetCameraKickConfig(bool bIsADS) const;
+
+	// === 탄약 ===
+
+	bool HasAmmo() const { return CurrentMagazineAmmo > 0; }
+
+	// 서버 전용: 승인된 발사 1회만큼 탄약을 소모한다.
+	void ConsumeAmmo();
+
+	// 소유 클라 예측용 탄약: 서버가 아직 처리하지 않은(비행 중인) 예측 발 수를 뺀다.
+	int32 GetPredictedMagazineAmmo() const;
+
 	bool CanReload() const;
 	void ReloadFromReserve();
 
 	int32 GetCurrentMagazineAmmo() const { return CurrentMagazineAmmo; }
 	int32 GetCurrentReserveAmmo() const { return CurrentReserveAmmo; }
+
+	// === 연출(로컬 전용) ===
+
+	// 트레이서/탄흔/총구 화염/사운드를 재생한다. 서버 판정과 무관하며 데디케이티드 서버에서는 아무것도 하지 않는다.
+	void PlayFireEffects(const FVector& ImpactPoint, const FVector& ImpactNormal, bool bBlockingHit, bool bHitCharacter) const;
+
+	FVector GetMuzzleLocation() const;
+
+	// === 조회 ===
+
 	float GetReloadDuration() const;
-	float GetShotInterval() const;
 	bool IsAutomatic() const;
-	float GetADSFieldOfView() const;
+	float GetADSFieldOfView(float HipFieldOfView) const;
 	float GetADSInterpSpeed() const;
 	UAnimMontage* GetFireMontage() const;
 	float GetFireMontagePlayRate() const;
@@ -77,12 +93,7 @@ public:
 	EValorWallPenetrationTier GetPenetrationTier() const;
 	float GetPenetrationDepth() const;
 	float GetPenetrationDamageMultiplier() const;
-
-	FVector ApplySpreadToDirection(const FVector& AimDirection, const FValorComputedShotData& ShotData) const;
 	float ComputeDamage(float DistanceCm, EValorHitZone HitZone) const;
-
-	// 런타임 확정 반동 프로파일(빈 패턴이면 기본 패턴이 주입된 상태). 뷰 펀치 파라미터 조회 등에 쓴다.
-	const FValorRecoilProfile& GetRecoilProfile() const { return ResolvedRecoilProfile; }
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Valor|Weapon")
@@ -91,9 +102,11 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Valor|Weapon")
 	USkeletalMeshComponent* WeaponMesh;
 
+	// 무기 정의(발로란트의 AKPrimaryAsset 같은 PrimaryDataAsset). 비어 있으면 FallbackWeaponConfig(= 밴달 기본값)를 쓴다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	TObjectPtr<UValorWeaponDataAsset> WeaponDataAsset;
 
+	// 데이터 자산이 없을 때 쓰는 설정. 구조체 기본값이 밴달이므로 별도 초기화 없이도 밴달로 동작한다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	FValorWeaponConfig FallbackWeaponConfig;
 
@@ -106,32 +119,20 @@ protected:
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Weapon")
 	int32 CurrentReserveAmmo = 0;
 
-	// 데이터 자산이 Pattern을 비워둔 경우, WeaponId에 맞는 코드 내장 기본 패턴을 채워 준다.
-	// === 새 총기 확장 지점 ===
-	// 새 무기를 추가할 때는 (1) 데이터 자산에서 RecoilProfile.Pattern을 직접 채우거나,
-	//                      (2) 아래 함수에 WeaponId 분기와 BuildDefault***Pattern을 추가하면 된다.
-	static void BuildDefaultPatternForWeapon(FName WeaponId, TArray<FValorRecoilStep>& OutPattern);
+	// 무기별 반동 난수 시드. 서버가 생성해 소유자에게만 복제한다(수평 방향 전환/탄퍼짐 예측을 서버와 일치시키기 위함).
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Weapon")
+	int32 RecoilSeed = 0;
 
-	// 발로란트 밴달의 결정적 스프레이 패턴 기본값이다(사진 기준: 긴 수직 줄기 + 상단 좌우 스윙).
-	static void BuildDefaultVandalPattern(TArray<FValorRecoilStep>& OutPattern);
+	// 서버가 승인한 누적 발사 수. 소유 클라는 이 값으로 (1) 예측 탄약을 보정하고 (2) 새 스프레이 시작 시 난수 번호를 재동기화한다.
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Weapon")
+	int32 ServerShotCount = 0;
 
 private:
-	void InitializeFallbackConfig();
 	void RefreshWeaponMeshAlignment();
-	void RefreshSprayState(float CurrentWorldTimeSeconds);
-	// 데이터 자산/폴백 설정으로부터 실제로 사용할 반동 프로파일을 확정한다(Pattern이 비면 WeaponId 기본 패턴 주입).
-	void ResolveRecoilProfile();
 
-	float LastServerFireWorldTime = -1000.0f;
-	int32 CurrentSprayShotCount = 0;
-	uint32 WeaponRandomSeed = 1337u;
+	// 반동/탄퍼짐 스프레이 상태(서버 = 권위, 소유 클라 = 예측). 복제하지 않는다.
+	FValorSprayState SprayState;
 
-	// 현재 스프레이에서 지금까지 누적된 반동 오프셋(도). 탄착이 조준점 대비 얼마나 벌어졌는지를 나타내며,
-	// 사격을 멈춰 스프레이가 리셋되면 0으로 돌아간다. 카메라가 아니라 탄 방향(ApplySpreadToDirection)에만 쓰인다.
-	float AccumulatedRecoilPitch = 0.0f;
-	float AccumulatedRecoilYaw = 0.0f;
-
-	// 런타임에서 실제로 참조하는 반동 프로파일이다. GetWeaponConfig()의 프로파일을 복사한 뒤
-	// 패턴이 비어 있으면 기본 밴달 패턴을 채워 넣어 항상 유효한 상태를 유지한다.
-	FValorRecoilProfile ResolvedRecoilProfile;
+	// 이 인스턴스가 계산한 누적 발사 수(= 다음 발의 난수 번호). 서버에서는 ServerShotCount와 같다.
+	int32 ShotCounter = 0;
 };
