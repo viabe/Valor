@@ -142,11 +142,10 @@ struct FValorMovementErrorValues
 	float AirborneError = 10.0f;
 };
 
-// 발사 모드 하나(힙파이어 = Primary Fire / 정조준 = Alternate Fire)의 수치.
+// 발사 모드 하나(힙파이어 = Primary Fire / 정조준·우클릭 = Alternate Fire)의 수치.
 // 발로란트 무기 데이터가 weaponStats(힙)와 adsStats(정조준)를 나눠 두는 구조를 그대로 따른다.
 // 기본값은 밴달 힙파이어 값이며, ADS 값은 FValorWeaponConfig 생성자에서 채운다.
-// "[구현 예정]" 필드는 공식 수치를 미리 담아 두는 데이터 전용 필드다. 현재 사격 코드는 읽지 않으며(산탄·점사·가속),
-// 해당 총을 구현할 때 이 값을 그대로 쓰면 된다.
+// "[구현 예정]" 필드는 공식 수치를 미리 담아 두는 데이터 전용 필드다(현재 코드는 읽지 않는다).
 USTRUCT(BlueprintType)
 struct FValorFireModeStats
 {
@@ -195,29 +194,29 @@ struct FValorFireModeStats
 	float MoveSpeedMultiplier = 0.8f;
 
 	// 한 발(방아쇠 1회)에 나가는 산탄 수. 1 = 일반 탄. 저지 12, 버키 15, 쇼티 15, 클래식 우클릭 3, 버키 우클릭 5.
-	// 피해량 구간(DamageRanges)은 산탄 한 알 기준이다. [구현 예정]
+	// 피해량 구간(DamageRanges)은 산탄 한 알 기준이고, 한 대상에 맞은 펠릿 피해는 합산해 한 번에 적용한다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="1"))
 	int32 PelletCount = 1;
 
-	// 한 발에 소모하는 탄약 수. 클래식 우클릭 = 3(탄창 12발 = 우클릭 4번). [구현 예정]
+	// 한 발에 소모하는 탄약 수. 클래식 우클릭 = 3(탄창 12발 = 우클릭 4번). 남은 탄이 모자라면 남은 만큼만 쏜다(펠릿도 비례).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="1"))
 	int32 AmmoPerShot = 1;
 
-	// 점사 발 수(1 = 점사 아님). 불독 ADS 3, 스팅어 ADS 4. [구현 예정]
+	// 점사 발 수(1 = 점사 아님). 불독 ADS 3, 스팅어 ADS 4. 한 번 누르면 버튼을 떼도 점사를 끝까지 쏜다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="1"))
 	int32 BurstCount = 1;
 
-	// 점사 안에서의 발사 속도(발/초). 불독 13.333, 스팅어 18. 0이면 점사가 아니다. [구현 예정]
+	// 점사 안에서의 발사 속도(발/초). 불독 13.333, 스팅어 18. 0이면 점사가 아니다.
 	// 점사 모드의 FireRate는 공식 표기대로 "평균" 속도다(불독 6.316, 스팅어 8.471).
-	// 점사 사이 대기 = BurstCount / FireRate - BurstCount / BurstFireRate → 불독 0.475 - 0.225, 스팅어 0.472 - 0.222, 둘 다 0.25초.
+	// 점사 주기 = BurstCount / FireRate → 불독 0.475초, 스팅어 0.472초(점사 안 간격을 빼면 둘 다 약 0.25초 대기).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
 	float BurstFireRate = 0.0f;
 
-	// 계속 쏠수록 발사 속도가 오르는 무기(오딘 힙파이어 12 → 15.6). 0이면 가속 없음. FireRate가 시작 속도다. [구현 예정]
+	// 계속 쏠수록 발사 속도가 오르는 무기(오딘 힙파이어 12 → 15.6). 0이면 가속 없음. FireRate가 시작 속도다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
 	float SpinUpMaxFireRate = 0.0f;
 
-	// FireRate → SpinUpMaxFireRate까지 오르는 데 걸리는 연사 시간(초). 공개 수치가 없어 오딘 값은 추정치다. [구현 예정]
+	// FireRate → SpinUpMaxFireRate까지 오르는 데 걸리는 연사 시간(초). 공개 수치가 없어 오딘 값은 추정치다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.0"))
 	float SpinUpTimeSeconds = 0.0f;
 
@@ -458,8 +457,10 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="100.0"))
 	float TraceDistanceCm = 50000.0f;
 
-	// 우클릭 동작 종류. ADS가 아닌 무기(None/Shotgun/AirBurst)는 줌이 없으므로 ADSZoomMultiplier = 1로 둔다.
-	// [구현 예정] 현재 입력은 우클릭을 모두 정조준으로 처리하므로, ADS가 없는 무기는 AltFire에 힙 수치를 복사해 둔다.
+	// 우클릭 동작 종류.
+	// - ADS: 우클릭 = 조준(줌). 저격총은 토글 조준, 오퍼레이터는 1단 → 2단 → 해제.
+	// - Shotgun/AirBurst: 우클릭 = 보조 발사(클래식 3펠릿 산탄, 버키 캐니스터). 줌이 없다.
+	// - None: 우클릭 동작 없음. ADS가 없는 무기는 줌이 없으므로 ADSZoomMultiplier = 1로 둔다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	EValorAltFireType AltFireType = EValorAltFireType::ADS;
 
@@ -467,9 +468,23 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="1.0"))
 	float ADSZoomMultiplier = 1.25f;
 
-	// 2단 줌 배율(오퍼레이터 "Dual Zoom toggle between 2.5x and 5x"의 5배). 0이면 2단 줌 없음. [구현 예정]
+	// 2단 줌 배율(오퍼레이터 "Dual Zoom toggle between 2.5x and 5x"의 5배). 0이면 2단 줌 없음.
+	// 2단 줌은 화면(FOV)만 바뀌고 정확도는 1단과 같다(발로란트와 동일).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
 	float SecondaryADSZoomMultiplier = 0.0f;
+
+	// 조준경 오버레이(저격총): 조준 중 화면을 조준경으로 덮고 1인칭 총 메시를 숨긴다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Scope")
+	bool bUseScopeOverlay = false;
+
+	// 조준경 화면 머티리얼(Material Domain = User Interface, 화면 전체에 그림). 비워 두면 HUD가 원형 조준경을 직접 그린다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Scope", meta=(EditCondition="bUseScopeOverlay"))
+	TObjectPtr<UMaterialInterface> ScopeOverlayMaterial = nullptr;
+
+	// 쏘면 조준이 풀리는 총(볼트·레버 액션: 오퍼레이터·마샬). 아웃로는 쌍열이라 쏴도 조준이 유지된다.
+	// 다시 조준하려면 우클릭을 다시 누른다(플레이어 설정 "자동 재조준"을 켜면 장전이 끝나는 대로 다시 조준).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Scope")
+	bool bUnscopeAfterShot = false;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.1"))
 	float ADSInterpSpeed = 18.0f;
@@ -479,7 +494,7 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon")
 	bool bSilenced = false;
 
-	// 버키 우클릭 캐니스터가 터지는 거리(cm). 공식 7.5m. 그 전에 맞으면 터지지 않고 펠릿 1알 피해만 준다. [구현 예정]
+	// 버키 우클릭 캐니스터가 터지는 거리(cm). 공식 7.5m. 그 전에 맞으면 터지지 않고 펠릿 1알 피해만 준다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
 	float AirBurstDistanceCm = 0.0f;
 

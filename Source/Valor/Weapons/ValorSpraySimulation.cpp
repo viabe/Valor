@@ -236,11 +236,71 @@ namespace Private
 		const float ErrorAlpha = FMath::Clamp(EvaluateCurve(GetRecoilProfile(Config, bIsADS).FiringErrorCurve, SprayIndex, 0.0f), 0.0f, 1.0f);
 		return FMath::Lerp(FireMode.FirstShotError, FireMode.MaxFiringError, ErrorAlpha);
 	}
+
+	// 이번 발을 반영해 점사/가속 상태를 갱신하고 "다음 발까지 최소 간격"을 돌려준다(직전 발 시각을 덮어쓰기 전에 호출).
+	float AdvanceFireCadence(const FValorFireModeStats& FireMode, FValorSprayState& State, double ShotTime)
+	{
+		const float BaseInterval = 1.0f / FMath::Max(FireMode.FireRate, 0.1f);
+		const double SinceLastShot = State.bHasFired ? ShotTime - State.LastShotTime : TNumericLimits<double>::Max();
+
+		// 점사(불독·스팅어 ADS): 한 번 누르면 BurstCount발을 점사 간격으로 쏘고, 다 쏘면 점사 사이 대기를 둔다.
+		if (FireMode.BurstCount > 1 && FireMode.BurstFireRate > 0.0f)
+		{
+			const float BurstInterval = 1.0f / FireMode.BurstFireRate;
+
+			// 점사 안에서는 정확히 점사 간격으로 쏘므로, 그 2배보다 오래 끊기면(탄창이 비어 멈춘 경우 등) 새 점사로 본다.
+			const bool bContinuesBurst = State.ShotsInBurst > 0 && State.ShotsInBurst < FireMode.BurstCount && SinceLastShot <= BurstInterval * 2.0;
+			State.ShotsInBurst = bContinuesBurst ? State.ShotsInBurst + 1 : 1;
+			State.ContinuousFireStartTime = ShotTime;
+			if (State.ShotsInBurst < FireMode.BurstCount)
+			{
+				return BurstInterval;
+			}
+
+			// 점사 주기 = BurstCount / FireRate(공식 "평균" 속도). 마지막 발 이후 대기 = 주기 - 점사 안에서 흐른 시간.
+			// 불독: 3 / 6.316 = 0.475초 → 0.475 - 0.075 × 2 = 0.325초, 스팅어: 4 / 8.471 = 0.472초 → 0.472 - 0.0556 × 3 = 0.306초.
+			State.ShotsInBurst = 0;
+			const float BurstCycle = static_cast<float>(FireMode.BurstCount) / FMath::Max(FireMode.FireRate, 0.1f);
+			return FMath::Max(BurstCycle - BurstInterval * static_cast<float>(FireMode.BurstCount - 1), BurstInterval);
+		}
+
+		State.ShotsInBurst = 0;
+
+		// 발사 속도 가속(오딘 힙파이어): 끊기지 않고 쏜 시간에 비례해 FireRate → SpinUpMaxFireRate로 오른다.
+		// 기본 간격의 1.5배보다 오래 끊기면(버튼을 뗐다가 다시 쏘면) 처음 속도부터 다시 시작한다.
+		if (FireMode.SpinUpMaxFireRate > FireMode.FireRate && FireMode.SpinUpTimeSeconds > 0.0f)
+		{
+			if (SinceLastShot > BaseInterval * 1.5)
+			{
+				State.ContinuousFireStartTime = ShotTime;
+			}
+
+			const float SpinAlpha = FMath::Clamp(static_cast<float>(ShotTime - State.ContinuousFireStartTime) / FireMode.SpinUpTimeSeconds, 0.0f, 1.0f);
+			return 1.0f / FMath::Lerp(FireMode.FireRate, FireMode.SpinUpMaxFireRate, SpinAlpha);
+		}
+
+		State.ContinuousFireStartTime = ShotTime;
+		return BaseInterval;
+	}
 }
 
 float GetFireInterval(const FValorWeaponConfig& Config, bool bIsADS)
 {
 	return 1.0f / FMath::Max(Private::GetFireMode(Config, bIsADS).FireRate, 0.1f);
+}
+
+float GetMaxFireRate(const FValorWeaponConfig& Config)
+{
+	float MaxRate = 0.1f;
+	for (const FValorFireModeStats* FireMode : {&Config.HipFire, &Config.AltFire})
+	{
+		MaxRate = FMath::Max3(MaxRate, FireMode->FireRate, FireMode->SpinUpMaxFireRate);
+		if (FireMode->BurstCount > 1)
+		{
+			MaxRate = FMath::Max(MaxRate, FireMode->BurstFireRate);
+		}
+	}
+	return MaxRate;
 }
 
 bool IsNewSpray(const FValorWeaponConfig& Config, bool bIsADS, const FValorSprayState& State, double ShotTime)
@@ -322,6 +382,11 @@ FValorComputedShotData AdvanceShot(const FValorWeaponConfig& Config, const FValo
 	Shot.ErrorPower = Modifiers.ErrorPower;
 	Shot.ErrorRadiusRandom = ErrorRadiusRandom;
 	Shot.ErrorAngleRandom = ErrorAngleRandom;
+	Shot.ShotSeed = ShotSeed;
+
+	// 발사 간격(점사·가속)은 직전 발 시각이 필요하므로 LastShotTime을 덮어쓰기 전에 갱신한다.
+	State.NextShotCooldown = Private::AdvanceFireCadence(Private::GetFireMode(Config, Stance.bIsADS), State, ShotTime);
+	State.bLastShotAltMode = Stance.bIsADS;
 
 	State.LastShotTime = ShotTime;
 	State.LastShotSprayIndex = SprayIndex;
@@ -344,6 +409,29 @@ FVector ComputeShotDirection(const FRotator& AimRotation, const FValorComputedSh
 	const FQuat ErrorQuat = FRotator(ErrorRadius * FMath::Sin(ErrorAngle), ErrorRadius * FMath::Cos(ErrorAngle), 0.0f).Quaternion();
 
 	return (AimQuat * RecoilQuat * ErrorQuat).GetForwardVector();
+}
+
+FVector ComputePelletDirection(const FRotator& AimRotation, const FValorComputedShotData& Shot, int32 PelletIndex)
+{
+	if (PelletIndex <= 0)
+	{
+		return ComputeShotDirection(AimRotation, Shot);
+	}
+
+	// 2번째 알부터는 "발 시드 + 펠릿 번호"로 독립 난수를 뽑는다. 발 시드는 서버/클라가 같으므로 산탄 모양도 같다.
+	// 발 전체의 반동·탄퍼짐 반경·중심 편향은 그대로 쓰고, 원 안의 위치만 펠릿마다 다르다.
+	FRandomStream PelletStream(static_cast<int32>(HashCombine(static_cast<uint32>(Shot.ShotSeed), static_cast<uint32>(PelletIndex))));
+	FValorComputedShotData PelletShot = Shot;
+	PelletShot.ErrorRadiusRandom = PelletStream.FRand();
+	PelletShot.ErrorAngleRandom = PelletStream.FRand();
+	return ComputeShotDirection(AimRotation, PelletShot);
+}
+
+FVector ComputeRecoilDirection(const FRotator& AimRotation, const FValorComputedShotData& Shot)
+{
+	FValorComputedShotData NoErrorShot = Shot;
+	NoErrorShot.FiringErrorDegrees = 0.0f;
+	return ComputeShotDirection(AimRotation, NoErrorShot);
 }
 
 int32 MakeShotSeed(int32 WeaponSeed, int32 ShotCounter)

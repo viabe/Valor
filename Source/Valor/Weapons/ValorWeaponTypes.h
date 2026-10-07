@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/NetSerialization.h"
 #include "ValorWeaponTypes.generated.h"
 
 // =====================================================================================================
@@ -59,6 +60,22 @@ struct FValorSprayState
 	int32 ShotsInSpray = 0;
 
 	bool bHasFired = false;
+
+	// --- 발사 간격(점사·발사 속도 가속) 상태 ---
+	// 서버와 소유 클라가 같은 규칙으로 계산한다. 서버는 연사 속도 검증에, 클라는 다음 발 예약에 쓴다.
+
+	// 지금 점사에서 쏜 발 수. 0이면 점사 중이 아니다(점사를 다 쏘면 0으로 돌아간다).
+	int32 ShotsInBurst = 0;
+
+	// 발사 속도 가속(오딘)용: 끊기지 않고 이어 쏘기 시작한 시각.
+	double ContinuousFireStartTime = -1000.0;
+
+	// 마지막 발 이후 다음 발까지 필요한 최소 간격(초).
+	// 일반 = 1/발사 속도, 점사 안 = 점사 간격, 점사를 다 쏜 뒤 = 점사 사이 대기, 가속 중 = 줄어든 간격.
+	float NextShotCooldown = 0.0f;
+
+	// 마지막 발이 보조 발사 모드(ADS 또는 우클릭 공격)였는지. 카메라/크로스헤어가 그 모드의 반동 규칙으로 평가하게 한다.
+	bool bLastShotAltMode = false;
 };
 
 /** 상태를 바꾸지 않는 "지금 쏜다면" 평가 결과. ADS 카메라와 크로스헤어가 매 프레임 읽는다. */
@@ -121,13 +138,17 @@ struct FValorComputedShotData
 
 	UPROPERTY()
 	float ErrorAngleRandom = 0.0f;
+
+	// 이 발의 난수 시드. 산탄총 펠릿(2번째 알부터)은 이 시드와 펠릿 번호로 각자의 퍼짐을 뽑는다(서버/클라 동일).
+	UPROPERTY()
+	int32 ShotSeed = 0;
 };
 
 /**
  * 클라 → 서버 발사 요청(RPC 파라미터).
  * 왜 이 두 값뿐인가: 프로젝트 원칙상 클라는 "입력"만 보낸다. 발사 시각(방아쇠를 당긴 순간)과 조준 방향(마우스 입력의 결과)은
  *   입력이고, 반동/탄퍼짐/피격 결과는 서버가 스스로 계산한다. 클라가 계산한 값은 절대 보내지 않는다.
- * 네트워크: NetSerialize로 12바이트 → 8바이트(시각 float 4 + Pitch/Yaw 각 2바이트)로 압축한다.
+ * 네트워크: NetSerialize로 약 8바이트 + 1비트(시각 float 4 + Pitch/Yaw 각 2바이트 + 우클릭 발사 여부)로 압축한다.
  *   발사는 초당 10회 가까이 오가므로 작게 유지할 가치가 있다.
  * 결정성: 클라는 보내기 전에 Quantize()로 서버가 받게 될 값과 똑같이 만든 뒤 그 값으로 예측한다.
  */
@@ -144,6 +165,11 @@ struct FValorShotRequest
 	UPROPERTY()
 	FRotator AimRotation = FRotator::ZeroRotator;
 
+	// 우클릭 공격으로 쏜 발인지(클래식 산탄·버키 캐니스터). 이것도 입력이다(어느 버튼을 눌렀나).
+	// 우클릭이 조준(ADS)인 총은 이 값을 무시하고 서버가 아는 조준 상태로 발사 모드를 정한다.
+	UPROPERTY()
+	bool bAltFire = false;
+
 	// NetSerialize와 동일한 양자화를 로컬에서 미리 적용한다(서버/클라가 비트 단위로 같은 입력을 쓰도록).
 	void Quantize();
 
@@ -157,4 +183,48 @@ struct TStructOpsTypeTraits<FValorShotRequest> : public TStructOpsTypeTraitsBase
 	{
 		WithNetSerializer = true
 	};
+};
+
+/** 탄 한 발(산탄총은 펠릿 한 알)의 탄착 연출 정보. 판정 결과가 아니라 "어디에 트레이서/탄흔을 그릴지"만 담는다. */
+USTRUCT()
+struct FValorShotImpact
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FVector_NetQuantize ImpactPoint = FVector::ZeroVector;
+
+	UPROPERTY()
+	FVector_NetQuantizeNormal ImpactNormal = FVector::UpVector;
+
+	UPROPERTY()
+	bool bBlockingHit = false;
+
+	UPROPERTY()
+	bool bHitCharacter = false;
+};
+
+/**
+ * 한 번의 발사 연출: 총구 화염·발사음 1회 + 탄착 N개(산탄총은 펠릿 수만큼).
+ * 네트워크: 서버가 다른 클라에게 비신뢰 멀티캐스트로 보낸다(사수 본인은 예측으로 직접 만든다).
+ *   펠릿마다 위치(양자화) + 법선만 보내므로 15알이어도 수백 바이트 수준이다.
+ */
+USTRUCT()
+struct FValorShotEffects
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FValorShotImpact> Impacts;
+
+	// 펠릿이 총구가 아닌 공중에서 퍼질 때(버키 캐니스터 폭발 지점)의 트레이서 시작점.
+	UPROPERTY()
+	FVector_NetQuantize TracerOrigin = FVector::ZeroVector;
+
+	UPROPERTY()
+	bool bHasTracerOrigin = false;
+
+	// 보조 발사 모드(ADS/우클릭 공격)로 쏜 발인지. 카메라 킥 세기를 고를 때 쓴다.
+	UPROPERTY()
+	bool bAltMode = false;
 };

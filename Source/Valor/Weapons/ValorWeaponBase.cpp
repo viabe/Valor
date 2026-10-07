@@ -47,6 +47,9 @@ AValorWeaponBase::AValorWeaponBase()
 
 	CurrentMagazineAmmo = FallbackWeaponConfig.MagazineSize;
 	CurrentReserveAmmo = FallbackWeaponConfig.MaxReserveAmmo;
+
+	// 기록이 없는 발은 1발을 쓴 것으로 본다(대부분의 총).
+	FMemory::Memset(PredictedRoundsByShot, 1, sizeof(PredictedRoundsByShot));
 }
 
 void AValorWeaponBase::BeginPlay()
@@ -103,6 +106,8 @@ void AValorWeaponBase::OnEquippedBy(AValorCharacter* NewOwnerCharacter)
 
 void AValorWeaponBase::OnUnequipped()
 {
+	SetScopedViewHidden(false);
+
 	if (WeaponMesh)
 	{
 		WeaponMesh->SetRelativeTransform(FTransform::Identity);
@@ -153,6 +158,37 @@ FVector AValorWeaponBase::ComputeShotDirection(const FRotator& AimRotation, cons
 	return ValorSpray::ComputeShotDirection(AimRotation, ShotData);
 }
 
+FVector AValorWeaponBase::ComputePelletDirection(const FRotator& AimRotation, const FValorComputedShotData& ShotData, int32 PelletIndex) const
+{
+	return ValorSpray::ComputePelletDirection(AimRotation, ShotData, PelletIndex);
+}
+
+FVector AValorWeaponBase::ComputeRecoilDirection(const FRotator& AimRotation, const FValorComputedShotData& ShotData) const
+{
+	return ValorSpray::ComputeRecoilDirection(AimRotation, ShotData);
+}
+
+float AValorWeaponBase::GetMaxFireRate() const
+{
+	return ValorSpray::GetMaxFireRate(GetWeaponConfig());
+}
+
+EValorAltFireType AValorWeaponBase::GetAltFireType() const
+{
+	return GetWeaponConfig().AltFireType;
+}
+
+bool AValorWeaponBase::IsAltFireAttack() const
+{
+	const EValorAltFireType AltFireType = GetAltFireType();
+	return AltFireType == EValorAltFireType::Shotgun || AltFireType == EValorAltFireType::AirBurst;
+}
+
+float AValorWeaponBase::GetAirBurstDistance() const
+{
+	return GetWeaponConfig().AirBurstDistanceCm;
+}
+
 float AValorWeaponBase::GetFireInterval(bool bIsADS) const
 {
 	return ValorSpray::GetFireInterval(GetWeaponConfig(), bIsADS);
@@ -176,14 +212,49 @@ const FValorCameraKickConfig& AValorWeaponBase::GetCameraKickConfig(bool bIsADS)
 	return bIsADS ? Config.AltFire.CameraKick : Config.HipFire.CameraKick;
 }
 
-void AValorWeaponBase::ConsumeAmmo()
+int32 AValorWeaponBase::GetRoundsForShot(bool bAltMode, int32 AvailableRounds) const
+{
+	if (AvailableRounds <= 0)
+	{
+		return 0;
+	}
+
+	const FValorWeaponConfig& Config = GetWeaponConfig();
+	const FValorFireModeStats& FireMode = bAltMode ? Config.AltFire : Config.HipFire;
+	return FMath::Clamp(FireMode.AmmoPerShot, 1, AvailableRounds);
+}
+
+int32 AValorWeaponBase::GetPelletCountForShot(bool bAltMode, int32 RoundsUsed) const
+{
+	const FValorWeaponConfig& Config = GetWeaponConfig();
+	const FValorFireModeStats& FireMode = bAltMode ? Config.AltFire : Config.HipFire;
+	const int32 PelletCount = FMath::Max(FireMode.PelletCount, 1);
+	if (FireMode.AmmoPerShot <= 1)
+	{
+		return PelletCount;
+	}
+
+	// 클래식 우클릭(3탄 3펠릿)을 탄 2발 남기고 쏘면 2펠릿만 나간다.
+	return FMath::Clamp((PelletCount * RoundsUsed) / FireMode.AmmoPerShot, 1, PelletCount);
+}
+
+int32 AValorWeaponBase::ConsumeAmmoForShot(bool bAltMode)
 {
 	if (!HasAuthority())
 	{
-		return;
+		return 0;
 	}
 
-	CurrentMagazineAmmo = FMath::Max(0, CurrentMagazineAmmo - 1);
+	const int32 RoundsUsed = GetRoundsForShot(bAltMode, CurrentMagazineAmmo);
+	CurrentMagazineAmmo = FMath::Max(0, CurrentMagazineAmmo - RoundsUsed);
+	return RoundsUsed;
+}
+
+void AValorWeaponBase::NotePredictedShotRounds(int32 Rounds)
+{
+	// SimulateShot이 ShotCounter를 올린 뒤에 호출되므로, 방금 쏜 발의 번호는 ShotCounter - 1이다.
+	const int32 ShotIndex = FMath::Max(ShotCounter - 1, 0);
+	PredictedRoundsByShot[ShotIndex % PredictedRoundsHistorySize] = static_cast<uint8>(FMath::Clamp(Rounds, 0, 255));
 }
 
 int32 AValorWeaponBase::GetPredictedMagazineAmmo() const
@@ -193,10 +264,15 @@ int32 AValorWeaponBase::GetPredictedMagazineAmmo() const
 		return CurrentMagazineAmmo;
 	}
 
-	// 서버가 아직 처리하지 않은 예측 발 수 = 로컬 누적 발사 수 - 서버 누적 발사 수.
-	// 탄약과 ServerShotCount는 같은 서버 프레임에 바뀌어 보통 함께 복제되므로 이 차이가 "비행 중인 발"이다.
-	const int32 ShotsInFlight = FMath::Max(0, ShotCounter - ServerShotCount);
-	return FMath::Max(0, CurrentMagazineAmmo - ShotsInFlight);
+	// 서버가 아직 처리하지 않은 예측 발 = 로컬 누적 발사 번호 [ServerShotCount, ShotCounter).
+	// 탄약과 ServerShotCount는 같은 서버 프레임에 바뀌어 보통 함께 복제되므로, 이 발들이 쓴 탄만큼 빼면 된다.
+	int32 RoundsInFlight = 0;
+	for (int32 ShotIndex = FMath::Max(ServerShotCount, ShotCounter - PredictedRoundsHistorySize); ShotIndex < ShotCounter; ++ShotIndex)
+	{
+		RoundsInFlight += PredictedRoundsByShot[ShotIndex % PredictedRoundsHistorySize];
+	}
+
+	return FMath::Max(0, CurrentMagazineAmmo - RoundsInFlight);
 }
 
 bool AValorWeaponBase::CanReload() const
@@ -233,7 +309,7 @@ void AValorWeaponBase::RestoreAmmoState(int32 MagazineAmmo, int32 ReserveAmmo)
 	CurrentReserveAmmo = FMath::Clamp(ReserveAmmo, 0, Config.MaxReserveAmmo);
 }
 
-void AValorWeaponBase::PlayFireEffects(const FVector& ImpactPoint, const FVector& ImpactNormal, bool bBlockingHit, bool bHitCharacter) const
+void AValorWeaponBase::PlayFireEffects(const FValorShotEffects& ShotEffects) const
 {
 	UWorld* World = GetWorld();
 	if (!World || World->GetNetMode() == NM_DedicatedServer)
@@ -244,31 +320,10 @@ void AValorWeaponBase::PlayFireEffects(const FVector& ImpactPoint, const FVector
 	const FValorWeaponFXConfig& Effects = GetWeaponConfig().Effects;
 	const FVector MuzzleLocation = GetMuzzleLocation();
 
+	// 총구 화염·발사음은 발사 1회에 한 번(산탄총 펠릿 수만큼 겹쳐 재생하지 않는다).
 	if (Effects.MuzzleFlashFX && WeaponMesh)
 	{
 		UNiagaraFunctionLibrary::SpawnSystemAttached(Effects.MuzzleFlashFX, WeaponMesh, Effects.MuzzleSocketName, FVector::ZeroVector, FRotator::ZeroRotator, EAttachLocation::SnapToTarget, true);
-	}
-
-	if (Effects.TracerFX)
-	{
-		if (UNiagaraComponent* TracerComponent = UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, Effects.TracerFX, MuzzleLocation, (ImpactPoint - MuzzleLocation).Rotation()))
-		{
-			TracerComponent->SetVariableVec3(Effects.TracerEndParameterName, ImpactPoint);
-		}
-	}
-
-	if (bBlockingHit)
-	{
-		if (Effects.ImpactFX)
-		{
-			UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, Effects.ImpactFX, ImpactPoint, ImpactNormal.Rotation());
-		}
-
-		// 캐릭터에는 데칼을 남기지 않는다(움직이는 대상에 데칼이 떠 보이는 문제 방지).
-		if (Effects.ImpactDecalMaterial && !bHitCharacter)
-		{
-			UGameplayStatics::SpawnDecalAtLocation(this, Effects.ImpactDecalMaterial, Effects.ImpactDecalSize, ImpactPoint, ImpactNormal.Rotation(), Effects.ImpactDecalLifeSpan);
-		}
 	}
 
 	if (Effects.FireSound)
@@ -277,21 +332,60 @@ void AValorWeaponBase::PlayFireEffects(const FVector& ImpactPoint, const FVector
 	}
 
 #if ENABLE_DRAW_DEBUG
-	if (CVarValorDrawShotDebug.GetValueOnGameThread() > 0)
+	const bool bDrawDebug = CVarValorDrawShotDebug.GetValueOnGameThread() > 0;
+#endif
+	auto SpawnTracer = [&](const FVector& TracerStart, const FVector& TracerEnd)
 	{
-		// 에셋이 비어 있는 동안에도 스프레이 모양이 벽에 보이도록 개발 빌드에서만 임시로 그린다.
-		// 트레이서는 총구에서 시작해야 카메라 정면 방향과 겹치지 않고 "줄기"로 보인다.
-		if (!Effects.TracerFX)
+		if (Effects.TracerFX)
 		{
-			DrawDebugLine(World, MuzzleLocation, ImpactPoint, FColor(255, 214, 120), false, 0.05f, 0, 0.6f);
+			if (UNiagaraComponent* TracerComponent = UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, Effects.TracerFX, TracerStart, (TracerEnd - TracerStart).Rotation()))
+			{
+				TracerComponent->SetVariableVec3(Effects.TracerEndParameterName, TracerEnd);
+			}
+		}
+#if ENABLE_DRAW_DEBUG
+		else if (bDrawDebug)
+		{
+			// 에셋이 비어 있는 동안에도 스프레이 모양이 보이도록 개발 빌드에서만 임시로 그린다.
+			// 트레이서는 총구에서 시작해야 카메라 정면 방향과 겹치지 않고 "줄기"로 보인다.
+			DrawDebugLine(World, TracerStart, TracerEnd, FColor(255, 214, 120), false, 0.05f, 0, 0.6f);
+		}
+#endif
+	};
+
+	// 버키 캐니스터: 총구 → 폭발 지점까지 한 줄, 펠릿은 폭발 지점에서 퍼진다.
+	const FVector PelletTracerStart = ShotEffects.bHasTracerOrigin ? FVector(ShotEffects.TracerOrigin) : MuzzleLocation;
+	if (ShotEffects.bHasTracerOrigin)
+	{
+		SpawnTracer(MuzzleLocation, PelletTracerStart);
+	}
+
+	for (const FValorShotImpact& Impact : ShotEffects.Impacts)
+	{
+		SpawnTracer(PelletTracerStart, Impact.ImpactPoint);
+
+		if (!Impact.bBlockingHit)
+		{
+			continue;
 		}
 
-		if (bBlockingHit && !Effects.ImpactDecalMaterial)
+		if (Effects.ImpactFX)
 		{
-			DrawDebugPoint(World, ImpactPoint, 7.0f, bHitCharacter ? FColor::Red : FColor::Yellow, false, 4.0f);
+			UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, Effects.ImpactFX, Impact.ImpactPoint, Impact.ImpactNormal.Rotation());
 		}
-	}
+
+		// 캐릭터에는 데칼을 남기지 않는다(움직이는 대상에 데칼이 떠 보이는 문제 방지).
+		if (Effects.ImpactDecalMaterial && !Impact.bHitCharacter)
+		{
+			UGameplayStatics::SpawnDecalAtLocation(this, Effects.ImpactDecalMaterial, Effects.ImpactDecalSize, Impact.ImpactPoint, Impact.ImpactNormal.Rotation(), Effects.ImpactDecalLifeSpan);
+		}
+#if ENABLE_DRAW_DEBUG
+		else if (bDrawDebug && !Effects.ImpactDecalMaterial)
+		{
+			DrawDebugPoint(World, Impact.ImpactPoint, 7.0f, Impact.bHitCharacter ? FColor::Red : FColor::Yellow, false, 4.0f);
+		}
 #endif
+	}
 }
 
 FVector AValorWeaponBase::GetMuzzleLocation() const
@@ -322,11 +416,57 @@ bool AValorWeaponBase::IsAutomatic() const
 
 float AValorWeaponBase::GetADSFieldOfView(float HipFieldOfView) const
 {
+	return GetZoomFieldOfView(HipFieldOfView, 1);
+}
+
+int32 AValorWeaponBase::GetMaxZoomLevel() const
+{
+	const FValorWeaponConfig& Config = GetWeaponConfig();
+	if (Config.AltFireType != EValorAltFireType::ADS)
+	{
+		return 0;
+	}
+
+	return Config.SecondaryADSZoomMultiplier > Config.ADSZoomMultiplier ? 2 : 1;
+}
+
+float AValorWeaponBase::GetZoomFieldOfView(float HipFieldOfView, int32 ZoomLevel) const
+{
 	// 줌 배율 Z는 화면 폭의 tan(FOV/2)를 1/Z로 줄이는 것과 같다: ADS_FOV = 2·atan(tan(Hip/2) / Z).
-	// 밴달(1.25배)·힙 103도 → 약 90.3도.
-	const float Zoom = FMath::Max(GetWeaponConfig().ADSZoomMultiplier, 1.0f);
+	// 밴달(1.25배)·힙 103도 → 약 90.3도, 오퍼레이터 2.5배 → 약 53.8도, 5배 → 약 28.1도.
+	const FValorWeaponConfig& Config = GetWeaponConfig();
+	const float ZoomMultiplier = (ZoomLevel >= 2 && Config.SecondaryADSZoomMultiplier > 0.0f) ? Config.SecondaryADSZoomMultiplier : Config.ADSZoomMultiplier;
+	const float Zoom = FMath::Max(ZoomMultiplier, 1.0f);
 	const float HalfHipRadians = FMath::DegreesToRadians(FMath::Clamp(HipFieldOfView, 5.0f, 170.0f) * 0.5f);
 	return FMath::RadiansToDegrees(2.0f * FMath::Atan(FMath::Tan(HalfHipRadians) / Zoom));
+}
+
+bool AValorWeaponBase::UsesScopeOverlay() const
+{
+	return GetWeaponConfig().bUseScopeOverlay;
+}
+
+UMaterialInterface* AValorWeaponBase::GetScopeOverlayMaterial() const
+{
+	return GetWeaponConfig().ScopeOverlayMaterial;
+}
+
+bool AValorWeaponBase::ShouldUnscopeAfterShot() const
+{
+	return GetWeaponConfig().bUnscopeAfterShot;
+}
+
+bool AValorWeaponBase::IsSniper() const
+{
+	return GetWeaponConfig().Category == EValorWeaponCategory::Sniper;
+}
+
+void AValorWeaponBase::SetScopedViewHidden(bool bHideForScope)
+{
+	if (WeaponMesh && WeaponMesh->IsVisible() == bHideForScope)
+	{
+		WeaponMesh->SetVisibility(!bHideForScope, true);
+	}
 }
 
 float AValorWeaponBase::GetADSInterpSpeed() const

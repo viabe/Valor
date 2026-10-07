@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "GameplayAbilitySpecHandle.h"
+#include "Templates/Function.h"
 #include "Weapons/Data/ValorWeaponDataAsset.h"
 #include "Weapons/ValorWeaponTypes.h"
 #include "ValorCombatComponent.generated.h"
@@ -69,11 +70,40 @@ public:
 	void ExecuteServerReloadAbility();
 	void SetADSStateFromAbility(bool bNewADS);
 
+	UFUNCTION(BlueprintPure, Category="Valor|Combat")
 	AValorWeaponBase* GetEquippedWeapon() const { return EquippedWeapon; }
+
 	bool IsADSActive() const { return bIsADS; }
+
+	UFUNCTION(BlueprintPure, Category="Valor|Combat")
 	bool IsReloading() const { return bIsReloading; }
-	bool IsFireInputHeld() const { return bLocalFireHeld; }
+
+	bool IsFireInputHeld() const { return bLocalFireHeld || bLocalAltFireHeld; }
 	float GetLastFireSimulationWorldTime() const { return LastFireSimulationWorldTime; }
+
+	// === UI(UMG 위젯)에서 읽는 값: 로컬 플레이어 기준 ===
+
+	// 탄창/예비 탄약. 소유 클라는 서버 복제를 기다리지 않도록 "예측 탄약"(비행 중인 발 제외)을 돌려준다.
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
+	int32 GetDisplayedMagazineAmmo() const;
+
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
+	int32 GetDisplayedReserveAmmo() const;
+
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
+	FText GetEquippedWeaponDisplayName() const;
+
+	// 현재 줌 단계: 0 = 비조준, 1 = 1단, 2 = 2단(오퍼레이터 5배).
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
+	int32 GetZoomLevel() const;
+
+	// 조준경 화면(저격총 조준 중)인지. true면 HUD가 조준경을 그리고 일반 크로스헤어/무기 UI를 숨기면 된다.
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
+	bool IsScopeOverlayActive() const;
+
+	// 지금 F로 주울 수 있는 총(줍기 안내 UI용). 서버 판정과 같은 규칙(조준선·거리·시야)을 로컬에서 계산한다.
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
+	AValorWeaponPickup* GetPickupInView() const { return FindPickupInView(); }
 
 	// 게임플레이 판단에 쓸 ADS 여부. 소유 클라는 RPC 왕복을 기다리지 않고 입력 의도로 예측하고, 서버는 복제 상태를 쓴다.
 	bool IsADSForGameplay() const;
@@ -153,6 +183,20 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Pickup", meta=(ClampMin="10.0"))
 	float DropGroundSearchDepth = 400.0f;
 
+	// === 조준 입력 방식(발로란트 설정 메뉴의 항목들. 나중에 설정 UI/세이브 데이터로 옮길 값) ===
+
+	// 저격총 조준: true = 토글(발로란트 기본). 우클릭할 때마다 1단 → 2단(오퍼레이터) → 해제. false = 누르고 있는 동안 1단.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
+	bool bToggleSniperZoom = true;
+
+	// 그 외 총의 ADS: false = 누르고 있는 동안(기본), true = 토글.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
+	bool bToggleADS = false;
+
+	// 쏘면 조준이 풀리는 저격총(오퍼레이터·마샬)을 장전이 끝나는 대로 다시 조준한다(발로란트 "자동 재조준" 설정).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
+	bool bAutoReScopeAfterShot = false;
+
 	// 발사 요청 1발. 신뢰성 RPC로 보내 유실/순서 뒤바뀜이 없게 한다(유실되면 서버/클라 스프레이 진행도가 한 발 어긋남).
 	UFUNCTION(Server, Reliable)
 	void ServerFireShot(const FValorShotRequest& Request);
@@ -166,9 +210,9 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void ServerInteractWithPickup();
 
-	// 다른 클라용 발사 연출(트레이서/탄흔/발사 몽타주). 연출은 한 발 놓쳐도 게임에 영향이 없으므로 비신뢰로 보낸다.
+	// 다른 클라용 발사 연출(트레이서/탄흔/발사 몽타주, 산탄총은 펠릿별 탄착). 연출은 한 발 놓쳐도 게임에 영향이 없으므로 비신뢰로 보낸다.
 	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastSimulateFire(FVector_NetQuantize ImpactPoint, FVector_NetQuantizeNormal ImpactNormal, bool bBlockingHit, bool bHitCharacter);
+	void MulticastSimulateFire(const FValorShotEffects& ShotEffects);
 
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastPlayReloadCue();
@@ -199,7 +243,23 @@ private:
 	void RejectShot(const TCHAR* Reason, bool bSuspicious);
 
 	// 로컬 사수(예측 클라 또는 리슨 호스트)의 발사 연출.
-	void PlayLocalShotPresentation(const FVector& ImpactPoint, const FVector& ImpactNormal, bool bBlockingHit, bool bHitCharacter);
+	void PlayLocalShotPresentation(const FValorShotEffects& ShotEffects);
+
+	// 이번 발의 발사 모드(true = AltFire 수치). 우클릭이 공격인 총은 요청의 버튼 정보, 조준 총은 조준 상태로 정한다.
+	bool ResolveShotAltMode(const FValorShotRequest& Request) const;
+
+	// 한 발의 탄 궤적을 순서대로 추적한다: 일반 1발 / 산탄 N펠릿 / 버키 캐니스터(폭발 전 명중 or 폭발 후 N펠릿).
+	// TraceRay(시작, 방향, 최대 거리, 피해 거리 보정, 탄착 기록) → 무언가에 맞았으면 true. 서버(판정)와 예측 클라(연출)가 같이 쓴다.
+	void TraceShot(const FValorShotRequest& Request, const FValorComputedShotData& ShotData, bool bAltMode, int32 PelletCount,
+		const FVector& TraceStart, FValorShotEffects& OutEffects,
+		TFunctionRef<bool(const FVector& RayStart, const FVector& RayDirection, float MaxDistance, float DamageDistanceOffset, FValorShotImpact& OutImpact)> TraceRay) const;
+
+	// 쏘면 조준이 풀리는 저격총(오퍼레이터·마샬): 서버는 조준 어빌리티를 끝내고, 로컬 사수는 줌을 풀고 (설정 시) 재조준을 예약한다.
+	void HandleUnscopeAfterShot();
+	void ReScopeAfterShot();
+
+	// 로컬 줌 단계를 바꾼다(소유 클라/리슨 호스트). 조준 on/off가 바뀔 때만 서버에 알린다(1단↔2단은 화면만 바뀜).
+	void SetLocalZoomLevel(int32 NewZoomLevel);
 
 	// 서버 전용: 새 총을 장착한다. 이미 들고 있던 총은 DropEquippedWeapon으로 바닥에 떨어뜨린다(발로란트식 교체).
 	void EquipWeapon(AValorWeaponBase* NewWeapon);
@@ -235,7 +295,24 @@ private:
 
 	// 로컬 입력 상태(소유 클라).
 	bool bLocalFireHeld = false;
+
+	// 조준 의도(= 로컬 줌 단계 > 0). 예측 클라는 서버 승인을 기다리지 않고 이 값으로 조준 여부를 예측한다.
 	bool bLocalADSIntent = false;
+
+	// 로컬 줌 단계(0 = 비조준, 1 = 1단, 2 = 2단). 화면 FOV와 조준경 UI에만 쓰는 값이라 복제하지 않는다.
+	int32 LocalZoomLevel = 0;
+
+	// 우클릭 버튼이 눌려 있는지(누르고 있는 동안 조준/자동 재조준 판단용).
+	bool bLocalADSButtonHeld = false;
+
+	// 우클릭 공격(클래식 산탄·버키 캐니스터) 버튼 유지, 발사 루프가 지금 우클릭 공격을 쏘는 중인지.
+	bool bLocalAltFireHeld = false;
+	bool bLocalFiringAltAttack = false;
+
+	// 자동 재조준(쏘면 풀리는 저격총) 예약과 돌아갈 줌 단계.
+	FTimerHandle ReScopeTimerHandle;
+	int32 PendingReScopeZoomLevel = 0;
+
 	double LastLocalShotTime = -1000.0;
 
 	// 연사 속도보다 빠른 탭이 "가장 이른 발사 가능 시각"으로 예약돼 있는지(버튼을 떼도 이 한 발은 쏜다).

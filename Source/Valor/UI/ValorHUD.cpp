@@ -53,7 +53,12 @@ void AValorHUD::DrawHUD()
 	FValorShooterStance Stance;
 	const bool bHasWeapon = CombatComponent && CombatComponent->GetCurrentSprayEvaluation(Spray, Stance);
 
-	if (bHasWeapon && Stance.bIsADS)
+	// 저격총 조준 중: 조준경이 크로스헤어를 대신한다(일반 크로스헤어/ADS 점은 그리지 않는다).
+	if (bHasWeapon && CombatComponent->IsScopeOverlayActive() && CombatComponent->GetEquippedWeapon())
+	{
+		DrawScopeOverlay(*CombatComponent->GetEquippedWeapon(), CenterX, CenterY, UIScale);
+	}
+	else if (bHasWeapon && Stance.bIsADS)
 	{
 		// ADS: 조준경 점만 표시. 카메라가 반동을 따라가므로(CameraRecoilFollowRatio=1) 이 점이 곧 탄이 향하는 곳이다.
 		const float DotSize = ADSDotSize * UIScale;
@@ -175,4 +180,63 @@ void AValorHUD::DrawRecoilDebug(float CenterX, float CenterY, float FocalLengthP
 float AValorHUD::AngleToPixels(float AngleDegrees, float FocalLengthPixels)
 {
 	return FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(AngleDegrees, -80.0f, 80.0f))) * FocalLengthPixels;
+}
+
+void AValorHUD::DrawScopeOverlay(const AValorWeaponBase& Weapon, float CenterX, float CenterY, float UIScale)
+{
+	// 1) 머티리얼 조준경: 아트에서 만든 조준경(마스크·눈금·흠집 등)을 화면 전체에 그린다.
+	if (UMaterialInterface* ScopeMaterial = Weapon.GetScopeOverlayMaterial())
+	{
+		DrawMaterial(ScopeMaterial, 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY, 0.0f, 0.0f, 1.0f, 1.0f);
+		return;
+	}
+
+	// 2) 기본 조준경(에셋 없이): 화면 중앙 원 밖을 검은 고리(삼각형 띠)로 덮는다.
+	//    바깥 반지름은 화면 대각선보다 크게 잡아 모서리까지 빈틈 없이 덮는다.
+	const float InnerRadius = Canvas->ClipY * ScopeRadiusRatio;
+	const float OuterRadius = FMath::Sqrt(FMath::Square(Canvas->ClipX) + FMath::Square(Canvas->ClipY));
+	const int32 Segments = FMath::Clamp(ScopeCircleSegments, 16, 256);
+	const FLinearColor MaskColor = FLinearColor::Black;
+
+	TArray<FCanvasUVTri> MaskTriangles;
+	MaskTriangles.Reserve(Segments * 2);
+	for (int32 SegmentIndex = 0; SegmentIndex < Segments; ++SegmentIndex)
+	{
+		const float AngleA = UE_TWO_PI * static_cast<float>(SegmentIndex) / Segments;
+		const float AngleB = UE_TWO_PI * static_cast<float>(SegmentIndex + 1) / Segments;
+		const FVector2D DirectionA(FMath::Cos(AngleA), FMath::Sin(AngleA));
+		const FVector2D DirectionB(FMath::Cos(AngleB), FMath::Sin(AngleB));
+		const FVector2D Center(CenterX, CenterY);
+		const FVector2D InnerA = Center + DirectionA * InnerRadius;
+		const FVector2D InnerB = Center + DirectionB * InnerRadius;
+		const FVector2D OuterA = Center + DirectionA * OuterRadius;
+		const FVector2D OuterB = Center + DirectionB * OuterRadius;
+
+		auto AddTriangle = [&MaskTriangles, &MaskColor](const FVector2D& A, const FVector2D& B, const FVector2D& C)
+		{
+			FCanvasUVTri& Triangle = MaskTriangles.AddDefaulted_GetRef();
+			Triangle.V0_Pos = A;
+			Triangle.V1_Pos = B;
+			Triangle.V2_Pos = C;
+			Triangle.V0_Color = MaskColor;
+			Triangle.V1_Color = MaskColor;
+			Triangle.V2_Color = MaskColor;
+		};
+		AddTriangle(InnerA, OuterA, OuterB);
+		AddTriangle(InnerA, OuterB, InnerB);
+	}
+	Canvas->K2_DrawTriangle(nullptr, MaskTriangles);
+
+	// 3) 조준선: 원 가장자리에서 중앙 쪽으로 가는 네 줄(가운데는 비워 탄착 지점을 가리지 않는다) + 정중앙 점.
+	const float Thickness = FMath::Max(1.0f, ScopeReticleThickness * UIScale);
+	const float HalfThickness = Thickness * 0.5f;
+	const float Gap = ScopeReticleCenterGap * UIScale;
+	const float LineLength = FMath::Max(InnerRadius - Gap, 0.0f);
+	DrawRect2D(ScopeReticleColor, CenterX - InnerRadius, CenterY - HalfThickness, LineLength, Thickness, 1.0f);
+	DrawRect2D(ScopeReticleColor, CenterX + Gap, CenterY - HalfThickness, LineLength, Thickness, 1.0f);
+	DrawRect2D(ScopeReticleColor, CenterX - HalfThickness, CenterY - InnerRadius, Thickness, LineLength, 1.0f);
+	DrawRect2D(ScopeReticleColor, CenterX - HalfThickness, CenterY + Gap, Thickness, LineLength, 1.0f);
+
+	const float DotSize = FMath::Max(1.0f, ScopeCenterDotSize * UIScale);
+	DrawRect2D(CrosshairColor, CenterX - (DotSize * 0.5f), CenterY - (DotSize * 0.5f), DotSize, DotSize, 1.0f);
 }

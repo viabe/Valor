@@ -164,6 +164,28 @@ bool FValorWeaponPresetOfficialTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("오퍼레이터 데드존 15%(1.09)"), Operator->Config.MovementAccuracy.DeadzoneSpeedRatio, 0.15f, 1.0e-4f);
 		TestEqual(TEXT("오퍼레이터 2단 줌 5배"), Operator->Config.SecondaryADSZoomMultiplier, 5.0f);
 		TestEqual(TEXT("오퍼레이터 줌 탄퍼짐 0"), Operator->Config.AltFire.FirstShotError, 0.0f);
+		TestTrue(TEXT("오퍼레이터는 조준경 + 쏘면 조준 해제"), Operator->Config.bUseScopeOverlay && Operator->Config.bUnscopeAfterShot);
+	}
+
+	if (const FValorWeaponPreset* Marshal = FindPreset(Presets, TEXT("Marshal")))
+	{
+		TestTrue(TEXT("마샬은 조준경 + 쏘면 조준 해제"), Marshal->Config.bUseScopeOverlay && Marshal->Config.bUnscopeAfterShot);
+	}
+
+	if (const FValorWeaponPreset* Outlaw = FindPreset(Presets, TEXT("Outlaw")))
+	{
+		// 13.01: 첫 발 뒤 조준 탄퍼짐 2.25°, 반동 4.0°. 쌍열이라 쏴도 조준이 유지된다.
+		TestTrue(TEXT("아웃로는 조준경 + 쏴도 조준 유지"), Outlaw->Config.bUseScopeOverlay && !Outlaw->Config.bUnscopeAfterShot);
+		TestEqual(TEXT("아웃로 두 번째 발 조준 탄퍼짐 2.25(13.01)"), Outlaw->Config.AltFire.MaxFiringError, 2.25f, 1.0e-4f);
+		TestEqual(TEXT("아웃로 두 번째 발 반동 4.0(13.01)"), ValorPresetTests::EvalCurve(Outlaw->Config.RecoilProfile.VerticalRecoilCurve, 1.0f), 4.0f, 1.0e-4f);
+	}
+
+	if (const FValorWeaponPreset* Bandit = FindPreset(Presets, TEXT("Bandit")))
+	{
+		// 13.00: 회복 0.4초, 탭 효율 4, 최대 수직 반동 3.
+		TestEqual(TEXT("밴딧 회복 0.4초(13.00)"), Bandit->Config.RecoilProfile.GunRecoveryTime, 0.4f, 1.0e-4f);
+		TestEqual(TEXT("밴딧 탭 효율 4(13.00)"), Bandit->Config.RecoilProfile.TapEfficiency, 4.0f, 1.0e-4f);
+		TestEqual(TEXT("밴딧 최대 수직 반동 3(13.00)"), ValorPresetTests::EvalCurve(Bandit->Config.RecoilProfile.VerticalRecoilCurve, 20.0f), 3.0f, 1.0e-4f);
 	}
 
 	if (const FValorWeaponPreset* Bucky = FindPreset(Presets, TEXT("Bucky")))

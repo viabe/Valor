@@ -228,7 +228,7 @@ namespace
 			TEXT("[공식] 우클릭(altShotgunStats): 3펠릿 산탄, 초당 2.22회 / 위키: 우클릭 첫 발 1.9° 최대 5.78°, 앉기 ×0.9, 이동 오차 0/0.6/1.5/2.25"),
 			TEXT("[공식] 위키: 좌클릭 최대 탄퍼짐 1.8°, 앉기 ×0.75, 이동 오차 0.5/1.1/2.3/7, 예비 36 / 2.0 패치: 우클릭 연속 점사 탄퍼짐 1.9 → 2.5 → 6.0"),
 			TEXT("[추정] 좌클릭 연타 반동 커브·회복 0.35초·탭 효율 3, 우클릭 수직 반동·회복 0.6초, 카메라 킥"),
-			TEXT("[구현 예정] 우클릭 3펠릿 산탄(PelletCount/AmmoPerShot) — 현재는 우클릭이 1발 조준 사격으로 동작"),
+			TEXT("[동작] 우클릭 = 3펠릿 산탄(탄 3발 소모, 남은 탄이 적으면 그만큼만)"),
 		});
 		return Preset;
 	}
@@ -254,7 +254,7 @@ namespace
 			TEXT("[공식] valorant-api(2026-09): 가격 300, 반자동 3발/초, 탄창 2, 장전 1.75초, 장착 0.75초, 펠릿 15, 탄퍼짐 4°, 이동 ×0.8, 관통 Low, 피해(펠릿당) 0~7m 22/11/9.35 · 7~15m 12/6/5.1 · 15m~ 6/3/2.55"),
 			TEXT("[공식] 위키: 탄퍼짐 첫 발=최대 4°, 앉기 ×0.75, 이동 오차 0.5/1/2/4(12.09 산탄총 공통 변경), 예비 6"),
 			TEXT("[추정] 스프레이 없음(느린 연사), 카메라 킥"),
-			TEXT("[구현 예정] 15펠릿 산탄(PelletCount) — 현재는 1발만 판정"),
+			TEXT("[동작] 15펠릿 산탄(펠릿별 랙 보상 판정, 한 대상 피해 합산)"),
 		});
 		return Preset;
 	}
@@ -329,11 +329,11 @@ namespace
 		SetFireMode(Config.HipFire, 5.1f, 0.275f, 1.97f, 0.75f, 0.85f);
 		SetCameraKick(Config.HipFire, 0.9f, 0.15f, 0.03f, 3.0f);
 
-		// [추정] 한 발 피해가 큰 권총이라 연타 반동을 고스트·클래식보다 크게 둔다.
-		SetCurve(Config.RecoilProfile.VerticalRecoilCurve, {{0.0f, 0.0f}, {1.0f, 0.9f}, {2.0f, 1.9f}, {3.0f, 2.8f}, {4.0f, 3.5f}, {5.0f, 4.0f}, {7.0f, 4.5f}});
+		// [공식] 13.00: 회복 0.45 → 0.4초, 탭 효율 3 → 4, 최대 수직 반동 4 → 3도. [추정] 3도까지 오르는 모양.
+		SetCurve(Config.RecoilProfile.VerticalRecoilCurve, {{0.0f, 0.0f}, {1.0f, 0.6f}, {2.0f, 1.27f}, {3.0f, 1.87f}, {4.0f, 2.33f}, {5.0f, 2.67f}, {7.0f, 3.0f}});
 		SetCurve(Config.RecoilProfile.HorizontalRecoilAmplitudeCurve, {{0.0f, 0.0f}, {1.0f, 0.0f}, {2.0f, 0.3f}, {4.0f, 0.8f}, {7.0f, 1.1f}});
 		SetCurve(Config.RecoilProfile.FiringErrorCurve, {{0.0f, 0.0f}, {1.0f, 0.25f}, {2.0f, 0.5f}, {3.0f, 0.75f}, {4.0f, 1.0f}});
-		SetRecoilRules(Config.RecoilProfile, 1, 0.2f, 0.3f, 2.0f, 0.45f, 2.5f);
+		SetRecoilRules(Config.RecoilProfile, 1, 0.2f, 0.3f, 2.0f, 0.4f, 4.0f);
 
 		SetMovementError(Config, 0.5f, 1.2f, 2.7f, 7.0f);
 		SetStanceRecoil(Config, 0.85f, 1.5f, 1.0f);
@@ -344,7 +344,8 @@ namespace
 		Preset.SourceNotes = JoinNotes({
 			TEXT("[공식] valorant-api(2026-09): 가격 600, 반자동 5.1발/초, 탄창 8, 장전 1.5초, 장착 0.75초, 첫 발 0.275°, 이동 ×0.85, 관통 Medium, 피해 0~10m 152/39/33 · 10~30m 128/39/33 · 30m~ 112/34/28"),
 			TEXT("[공식] 위키: 최대 탄퍼짐 1.97°, 앉기 ×0.75, 이동 오차 0.5/1.2/2.7/7, 예비 24 (12.00 추가 무기)"),
-			TEXT("[추정] 연타 반동 커브, 회복 0.45초, 탭 효율 2.5, 카메라 킥"),
+			TEXT("[공식] 13.00: 회복 0.4초, 탭 효율 4, 최대 수직 반동 3도"),
+			TEXT("[추정] 수직 반동이 3도까지 오르는 모양, 수평 반동, 탄퍼짐 증가 곡선, 카메라 킥"),
 		});
 		return Preset;
 	}
@@ -425,7 +426,7 @@ namespace
 			TEXT("[공식] ADS: 1.15배, 4점사(점사 안 18발/초, 평균 8.471발/초), 첫 발 0.35° 최대 2.74°, 앉기 ×0.75, 이동 ×0.76 / 위키: 힙 최대 1.5°(11.08: 6발째 도달), 앉기 ×0.85, 이동 오차 0.15/1/2.5/10, 예비 60"),
 			TEXT("[공식] 2.03: 점사 회복 0.45 → 0.4초, 첫 점사 이후 수직 반동·오차 증가"),
 			TEXT("[추정] 연사·점사 반동 크기(AimFinder 상대값 × 밴달 실측), 보호 탄 0(AimFinder), 수평 전환 0.4초/10%, 힙 회복 0.4초, 탭 효율 3, 달리기 반동 ×1.5, 카메라 킥"),
-			TEXT("[구현 예정] ADS 4점사(BurstCount/BurstFireRate) — 현재 ADS는 평균 속도 8.47발/초 단발 연사로 동작"),
+			TEXT("[동작] ADS = 4점사(한 번 누르면 끝까지, 누르고 있으면 점사 반복, 점사 사이 약 0.31초)"),
 		});
 		return Preset;
 	}
@@ -505,7 +506,7 @@ namespace
 			TEXT("[공식] 피해(펠릿당) 0~8m 34/17/14 · 8~12m 26/13/11.05 · 12m~ 18/9/7.65 / 우클릭(airBurstStats): 5펠릿, 7.5m에서 폭발, 펠릿 퍼짐 2.0°(2.06)"),
 			TEXT("[공식] 위키 12.09: 최소 탄퍼짐 2.6 → 3.0, 이동 오차 0.5/1/2/4 (위키 표의 '최대 2.6°·달리기 0.2'는 12.09 이전 값이라 쓰지 않음), 앉기 ×0.9, 예비 10"),
 			TEXT("[추정] 스프레이 없음(펌프 액션), 카메라 킥"),
-			TEXT("[구현 예정] 15펠릿 산탄, 우클릭 캐니스터(7.5m 전에 맞으면 펠릿 1알 피해), 셸 단위 장전"),
+			TEXT("[동작] 15펠릿 산탄, 우클릭 = 캐니스터(7.5m에서 5펠릿으로 폭발, 그 전에 맞으면 펠릿 1알 피해) / [구현 예정] 셸 단위 장전"),
 		});
 		return Preset;
 	}
@@ -536,7 +537,7 @@ namespace
 			TEXT("[공식] valorant-api(2026-09): 가격 1850, 자동 3.5발/초, 탄창 5, 장전 2.2초, 장착 1초, 펠릿 12, 첫 발 2.5°(PC, 12.09), 이동 ×0.75, 관통 Low"),
 			TEXT("[공식] 피해(펠릿당) 0~10m 34/17/14.45 · 10~15m 20/10/8.5 · 15m~ 14/7/5.95 / 위키: 최대 탄퍼짐 4°, 앉기 ×0.75, 이동 오차 0.5/1/2/4(12.09), 예비 15"),
 			TEXT("[추정] 연사 반동 커브, 회복 0.5초, 탭 효율 2, 카메라 킥"),
-			TEXT("[구현 예정] 12펠릿 산탄(PelletCount) — 현재는 1발만 판정"),
+			TEXT("[동작] 12펠릿 자동 산탄(펠릿별 랙 보상 판정, 한 대상 피해 합산)"),
 		});
 		return Preset;
 	}
@@ -578,7 +579,7 @@ namespace
 			TEXT("[공식] ADS: 1.25배, 3점사(점사 안 13.333발/초, 평균 6.316발/초), 첫 발 0.1° 최대 1.5°, 앉기 ×0.75, 이동 ×0.76 / 위키: 힙 최대 1.25°, 앉기 ×0.85, 이동 오차 0.8/3/6/10, 예비 72"),
 			TEXT("[공식] 패치: 회복 0.35초(0.50, 점사 4.0), 수평 전환 0.6초·확률 10%(11.08)"),
 			TEXT("[추정] 반동 크기(AimFinder 상대값 × 밴달 실측), 보호 탄 6(AimFinder), 탭 효율 4, 달리기 반동 ×1.5, 카메라 킥"),
-			TEXT("[구현 예정] ADS 3점사(BurstCount/BurstFireRate) — 현재 ADS는 평균 속도 6.32발/초 단발 연사로 동작"),
+			TEXT("[동작] ADS = 3점사(한 번 누르면 끝까지, 누르고 있으면 점사 반복, 점사 사이 0.325초)"),
 		});
 		return Preset;
 	}
@@ -711,6 +712,10 @@ namespace
 		Config.AltFireType = EValorAltFireType::ADS;
 		Config.ADSZoomMultiplier = 3.5f;
 
+		// [공식] 레버 액션: 쏘면 조준이 풀린다(오퍼레이터와 같음, 아웃로는 유지).
+		Config.bUseScopeOverlay = true;
+		Config.bUnscopeAfterShot = true;
+
 		SetFireMode(Config.HipFire, 1.5f, 1.0f, 1.0f, 0.9f, 0.8f);
 		SetCameraKick(Config.HipFire, 1.5f, 0.25f, 0.04f, 5.0f);
 
@@ -727,8 +732,8 @@ namespace
 
 		Preset.SourceNotes = JoinNotes({
 			TEXT("[공식] valorant-api(2026-09): 가격 950, 반자동 1.5발/초(줌 1.2), 탄창 5, 장전 2.5초(위키: 발당 0.5초), 장착 1.25초, 비조준 탄퍼짐 1°, 이동 ×0.8(줌 ×0.9), 줌 3.5배, 관통 Medium, 피해 202/101/85.85"),
-			TEXT("[공식] 위키: 줌 탄퍼짐 0°, 앉기 ×0.9, 이동 오차 7.5/10/15/20, 예비 15"),
-			TEXT("[추정] 스프레이 없음, 카메라 킥 / [구현 예정] 발 단위 장전, 발사 후 자동 재조준"),
+			TEXT("[공식] 위키: 줌 탄퍼짐 0°, 앉기 ×0.9, 이동 오차 7.5/10/15/20, 예비 15 / 쏘면 조준이 풀림"),
+			TEXT("[추정] 스프레이 없음, 카메라 킥 / [동작] 조준경 오버레이, 발사 후 조준 해제(자동 재조준은 플레이어 설정) / [구현 예정] 발 단위 장전"),
 		});
 		return Preset;
 	}
@@ -741,13 +746,25 @@ namespace
 		Config.AltFireType = EValorAltFireType::ADS;
 		Config.ADSZoomMultiplier = 3.5f;
 
+		// [공식] 쌍열이라 쏴도 조준이 유지된다(오퍼레이터·마샬과 다른 점).
+		Config.bUseScopeOverlay = true;
+		Config.bUnscopeAfterShot = false;
+
 		SetFireMode(Config.HipFire, 2.75f, 3.5f, 3.5f, 0.9f, 0.8f);
 		SetCameraKick(Config.HipFire, 2.0f, 0.3f, 0.04f, 5.0f);
 
-		SetFireMode(Config.AltFire, 2.75f, 0.0f, 0.0f, 0.9f, 0.8f);
+		// [공식] 13.01: 첫 발 뒤 조준 탄퍼짐 0 → 2.25°, 반동 0 → 4.0°(조준 반동 배율은 1로 둬서 4.0° 그대로).
+		SetFireMode(Config.AltFire, 2.75f, 0.0f, 2.25f, 0.9f, 0.8f);
+		Config.AltFire.RecoilMultiplier = 1.0f;
 		SetCameraKick(Config.AltFire, 1.6f, 0.25f, 0.04f, 5.0f);
 
-		SetNoSpray(Config.RecoilProfile, 0.3f);
+		// 두 번째 발(인덱스 1)에 반동 4°와 탄퍼짐 최대치를 준다.
+		// [공식] "Recovery 0.1 → 0.15 after first shot". 두 번째 발은 빨라야 0.364초(1/2.75) 뒤라서, 회복을 첫 발 시각부터 재면
+		// 이 조정이 아무 효과가 없다. 그래서 "다시 쏠 수 있게 된 뒤 0.15초"로 해석했다(해석): 0.364 + 0.15 ≈ 0.51초.
+		SetCurve(Config.RecoilProfile.VerticalRecoilCurve, {{0.0f, 0.0f}, {1.0f, 4.0f}});
+		SetCurve(Config.RecoilProfile.HorizontalRecoilAmplitudeCurve, {{0.0f, 0.0f}});
+		SetCurve(Config.RecoilProfile.FiringErrorCurve, {{0.0f, 0.0f}, {1.0f, 1.0f}});
+		SetRecoilRules(Config.RecoilProfile, 0, 0.0f, 0.6f, 0.0f, 1.0f / 2.75f + 0.15f, 1.0f);
 
 		SetMovementError(Config, 7.5f, 10.0f, 15.0f, 20.0f);
 		SetStanceRecoil(Config, 0.85f, 1.5f, 1.0f);
@@ -756,8 +773,9 @@ namespace
 
 		Preset.SourceNotes = JoinNotes({
 			TEXT("[공식] valorant-api(2026-09): 가격 2400, 반자동 2.75발/초(줌 동일), 탄창 2(쌍열), 장전 3.8초(위키: 1발만 넣으면 2.3초), 장착 1.25초, 비조준 탄퍼짐 3.5°, 이동 ×0.8(줌 ×0.8), 줌 3.5배, 관통 High"),
-			TEXT("[공식] 피해 238/140/119 / 위키: 줌 탄퍼짐 0°, 앉기 ×0.9, 이동 오차 7.5/10/15/20, 예비 10"),
-			TEXT("[추정] 스프레이 없음, 카메라 킥 / [구현 예정] 1발 장전 2.3초(부분 장전)"),
+			TEXT("[공식] 피해 238/140/119 / 위키: 줌 탄퍼짐 0°, 앉기 ×0.9, 이동 오차 7.5/10/15/20, 예비 10 / 쏴도 조준 유지"),
+			TEXT("[공식] 13.01: 첫 발 뒤 조준 탄퍼짐 2.25°, 반동 4.0°, 회복 0.1 → 0.15초 [해석] 회복은 다시 쏠 수 있게 된 뒤 0.15초(= 첫 발 뒤 약 0.51초)"),
+			TEXT("[추정] 카메라 킥 / [동작] 조준경 오버레이 / [구현 예정] 1발 장전 2.3초(부분 장전)"),
 		});
 		return Preset;
 	}
@@ -770,6 +788,10 @@ namespace
 		Config.AltFireType = EValorAltFireType::ADS;
 		Config.ADSZoomMultiplier = 2.5f;
 		Config.SecondaryADSZoomMultiplier = 5.0f;
+
+		// [공식] 볼트 액션: 쏘면 조준이 풀린다.
+		Config.bUseScopeOverlay = true;
+		Config.bUnscopeAfterShot = true;
 
 		SetFireMode(Config.HipFire, 0.6f, 5.0f, 5.0f, 0.9f, 0.76f);
 		SetCameraKick(Config.HipFire, 2.5f, 0.35f, 0.05f, 6.0f);
@@ -788,8 +810,8 @@ namespace
 
 		Preset.SourceNotes = JoinNotes({
 			TEXT("[공식] valorant-api(2026-09): 가격 4700, 반자동 0.6발/초, 탄창 5, 장전 3.7초, 장착 1.5초, 비조준 탄퍼짐 5°, 이동 ×0.76(줌 ×0.72), 2단 줌 2.5배/5배, 관통 High, 피해 255/150/120"),
-			TEXT("[공식] 위키: 줌 탄퍼짐 0°, 앉기 ×0.9, 이동 오차 7.5/10/15/15, 예비 10 / 1.09: 이동 데드존 30% → 15%"),
-			TEXT("[추정] 스프레이 없음, 카메라 킥 / [구현 예정] 2단 줌(SecondaryADSZoomMultiplier)"),
+			TEXT("[공식] 위키: 줌 탄퍼짐 0°, 앉기 ×0.9, 이동 오차 7.5/10/15/15, 예비 10 / 1.09: 이동 데드존 30% → 15% / 쏘면 조준이 풀림"),
+			TEXT("[추정] 스프레이 없음, 카메라 킥 / [동작] 2단 줌(우클릭 토글: 2.5배 → 5배 → 해제), 조준경 오버레이, 발사 후 조준 해제"),
 		});
 		return Preset;
 	}
@@ -865,7 +887,7 @@ namespace
 			TEXT("[공식] valorant-api(2026-09): 가격 3200, 자동 12발/초 → 15.6(ROFIncrease, ADS는 처음부터 15.6), 탄창 100, 장전 5초, 장착 1.25초, 첫 발 0.8°(ADS 0.79°), 이동 ×0.76, 줌 1.15배, 관통 High"),
 			TEXT("[공식] 피해 0~30m 95/38/32.3 · 30m~ 77.5/31/26.35 / 위키: 최대 탄퍼짐 1.3°(ADS 1.36°), 앉기 ×0.6, 이동 오차 0.4/3/6.5/10, 예비 200 / 0.50: 8발 이후 수평 반동 감소"),
 			TEXT("[추정] 가속 시간 1초, 반동 크기(AimFinder 상대값 × 밴달 실측), 보호 탄 4(AimFinder), 수평 전환 0.6초/10%, 회복 0.4초, 탭 효율 3, 달리기 반동 ×1.5, 카메라 킥"),
-			TEXT("[구현 예정] 힙파이어 발사 속도 가속(SpinUpMaxFireRate/SpinUpTimeSeconds) — 현재는 12발/초 고정"),
+			TEXT("[동작] 힙파이어 발사 속도 가속 12 → 15.6(끊기면 처음부터), ADS는 처음부터 15.6"),
 		});
 		return Preset;
 	}

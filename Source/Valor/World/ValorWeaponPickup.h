@@ -41,6 +41,10 @@ public:
 
 	bool IsPickupAvailable() const { return bIsAvailable; }
 
+	// 줍기 안내 UI용 총 이름(무기 데이터 에셋의 DisplayName). 클라에서도 동작한다(WeaponClass가 복제되므로).
+	UFUNCTION(BlueprintPure, Category="Valor|Pickup")
+	FText GetWeaponDisplayName() const;
+
 	// 조준으로 고를 수 있는 반경(cm) = 줍기 구의 반지름.
 	float GetInteractionRadius() const;
 

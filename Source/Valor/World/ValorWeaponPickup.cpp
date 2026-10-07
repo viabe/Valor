@@ -112,6 +112,12 @@ void AValorWeaponPickup::InitializeFromDroppedWeapon(const AValorWeaponBase& Dro
 	RefreshDisplayMesh();
 }
 
+FText AValorWeaponPickup::GetWeaponDisplayName() const
+{
+	const AValorWeaponBase* WeaponDefaults = WeaponClass ? WeaponClass->GetDefaultObject<AValorWeaponBase>() : nullptr;
+	return WeaponDefaults ? WeaponDefaults->GetWeaponConfig().DisplayName : FText::GetEmpty();
+}
+
 float AValorWeaponPickup::GetInteractionRadius() const
 {
 	return InteractionSphere ? InteractionSphere->GetScaledSphereRadius() : 0.0f;

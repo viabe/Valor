@@ -8,6 +8,7 @@
 
 class AValorCharacter;
 class UAnimMontage;
+class UMaterialInterface;
 class USkeletalMeshComponent;
 class USceneComponent;
 class UValorWeaponDataAsset;
@@ -53,18 +54,56 @@ public:
 	// 조준 방향 + 반동 + 탄퍼짐 샘플 → 최종 탄 방향.
 	FVector ComputeShotDirection(const FRotator& AimRotation, const FValorComputedShotData& ShotData) const;
 
+	// 산탄 펠릿 하나의 방향(0번 = ComputeShotDirection). 발 시드 + 펠릿 번호라 서버/클라가 같은 산탄 모양을 만든다.
+	FVector ComputePelletDirection(const FRotator& AimRotation, const FValorComputedShotData& ShotData, int32 PelletIndex) const;
+
+	// 탄퍼짐 없이 반동만 적용한 방향(버키 캐니스터의 비행 방향).
+	FVector ComputeRecoilDirection(const FRotator& AimRotation, const FValorComputedShotData& ShotData) const;
+
 	float GetFireInterval(bool bIsADS) const;
 	float GetCameraRecoilFollowRatio(bool bIsADS) const;
 	const FValorCameraKickConfig& GetCameraKickConfig(bool bIsADS) const;
+
+	// === 발사 간격(점사·발사 속도 가속) ===
+
+	// 마지막 발 이후 다음 발까지 필요한 최소 간격(초). 서버는 연사 속도 검증에, 클라는 다음 발 예약에 쓴다.
+	float GetNextShotCooldown() const { return SprayState.NextShotCooldown; }
+
+	// 점사 도중인지(한 번 누른 점사는 버튼을 떼도 끝까지 쏜다).
+	bool IsBurstInProgress() const { return SprayState.ShotsInBurst > 0; }
+
+	// 마지막 발이 보조 발사 모드(ADS/우클릭 공격)였는지.
+	bool WasLastShotAltMode() const { return SprayState.bLastShotAltMode; }
+
+	// 이 무기의 가장 빠른 순간 발사 속도(점사 안 속도·가속 최고 속도 포함). 서버 수신 속도 제한에 쓴다.
+	float GetMaxFireRate() const;
+
+	// === 우클릭 ===
+
+	EValorAltFireType GetAltFireType() const;
+
+	// 우클릭이 조준이 아니라 "보조 공격"인 총인지(클래식 산탄, 버키 캐니스터).
+	bool IsAltFireAttack() const;
+
+	float GetAirBurstDistance() const;
 
 	// === 탄약 ===
 
 	bool HasAmmo() const { return CurrentMagazineAmmo > 0; }
 
-	// 서버 전용: 승인된 발사 1회만큼 탄약을 소모한다.
-	void ConsumeAmmo();
+	// 이 모드로 한 발 쏠 때 쓰는 탄 수(AmmoPerShot, 남은 탄이 모자라면 남은 만큼).
+	int32 GetRoundsForShot(bool bAltMode, int32 AvailableRounds) const;
 
-	// 소유 클라 예측용 탄약: 서버가 아직 처리하지 않은(비행 중인) 예측 발 수를 뺀다.
+	// 이번 발의 펠릿 수. 탄을 덜 쓴 경우(클래식 우클릭을 1~2발 남기고 쏜 경우) 펠릿도 그 비율로 줄어든다.
+	int32 GetPelletCountForShot(bool bAltMode, int32 RoundsUsed) const;
+
+	// 서버 전용: 승인된 발사 1회만큼 탄약을 소모하고, 실제로 쓴 탄 수를 돌려준다.
+	int32 ConsumeAmmoForShot(bool bAltMode);
+
+	// 소유 클라 전용: 방금 예측한 발이 쓴 탄 수를 기록한다(예측 탄약 계산용).
+	void NotePredictedShotRounds(int32 Rounds);
+
+	// 소유 클라 예측용 탄약: 서버가 아직 처리하지 않은(비행 중인) 예측 발들이 쓴 탄 수를 뺀다.
 	int32 GetPredictedMagazineAmmo() const;
 
 	bool CanReload() const;
@@ -82,10 +121,27 @@ public:
 
 	// === 연출(로컬 전용) ===
 
-	// 트레이서/탄흔/총구 화염/사운드를 재생한다. 서버 판정과 무관하며 데디케이티드 서버에서는 아무것도 하지 않는다.
-	void PlayFireEffects(const FVector& ImpactPoint, const FVector& ImpactNormal, bool bBlockingHit, bool bHitCharacter) const;
+	// 총구 화염·발사음은 한 번, 트레이서·탄착 이펙트·탄흔은 탄착(펠릿)마다 재생한다.
+	// 서버 판정과 무관하며 데디케이티드 서버에서는 아무것도 하지 않는다.
+	void PlayFireEffects(const FValorShotEffects& ShotEffects) const;
 
 	FVector GetMuzzleLocation() const;
+
+	// === 줌/조준경 ===
+
+	// 조준 단계 수: 0 = 조준 없음(우클릭이 공격이거나 없음), 1 = 1단, 2 = 2단 줌(오퍼레이터).
+	int32 GetMaxZoomLevel() const;
+
+	// 줌 단계별 화면 FOV. 1단 = ADSZoomMultiplier, 2단 = SecondaryADSZoomMultiplier.
+	float GetZoomFieldOfView(float HipFieldOfView, int32 ZoomLevel) const;
+
+	bool UsesScopeOverlay() const;
+	UMaterialInterface* GetScopeOverlayMaterial() const;
+	bool ShouldUnscopeAfterShot() const;
+	bool IsSniper() const;
+
+	// 로컬 전용: 조준경 화면일 때 1인칭 총 메시를 숨긴다(가시성은 복제되지 않으므로 다른 플레이어 화면에는 영향 없음).
+	void SetScopedViewHidden(bool bHideForScope);
 
 	// === 조회 ===
 
@@ -142,4 +198,8 @@ private:
 
 	// 이 인스턴스가 계산한 누적 발사 수(= 다음 발의 난수 번호). 서버에서는 ServerShotCount와 같다.
 	int32 ShotCounter = 0;
+
+	// 소유 클라: 최근 예측 발들이 쓴 탄 수(발 번호 % 크기로 순환). 한 발에 여러 탄을 쓰는 클래식 우클릭 때문에 필요하다.
+	static constexpr int32 PredictedRoundsHistorySize = 32;
+	uint8 PredictedRoundsByShot[PredictedRoundsHistorySize];
 };

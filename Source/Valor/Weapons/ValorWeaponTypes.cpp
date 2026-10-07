@@ -31,6 +31,14 @@ bool FValorShotRequest::NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutS
 		AimRotation = FRotator(FRotator::DecompressAxisFromShort(PitchShort), FRotator::DecompressAxisFromShort(YawShort), 0.0f).GetNormalized();
 	}
 
+	// 우클릭 발사 여부는 1비트면 된다(네트워크 비트 스트림에서는 정확히 1비트만 쓴다).
+	uint8 AltFireBit = bAltFire ? 1 : 0;
+	Ar.SerializeBits(&AltFireBit, 1);
+	if (Ar.IsLoading())
+	{
+		bAltFire = (AltFireBit & 1) != 0;
+	}
+
 	bOutSuccess = true;
 	return true;
 }

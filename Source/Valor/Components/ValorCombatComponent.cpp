@@ -75,6 +75,7 @@ void UValorCombatComponent::HandleFireInputPressed()
 	}
 
 	bLocalFireHeld = true;
+	bLocalFiringAltAttack = false;
 	TryFireLocalShot();
 }
 
@@ -82,8 +83,8 @@ void UValorCombatComponent::HandleFireInputReleased()
 {
 	bLocalFireHeld = false;
 
-	// 연사 속도보다 빨리 눌러 예약된 탭(버퍼된 한 발)은 버튼을 떼도 쏜다. 그 외의 연사 예약만 취소한다.
-	if (bFireShotBuffered)
+	// 연사 속도보다 빨리 눌러 예약된 탭(버퍼된 한 발)과 이미 시작한 점사는 버튼을 떼도 쏜다. 그 외의 연사 예약만 취소한다.
+	if (bFireShotBuffered || (EquippedWeapon && EquippedWeapon->IsBurstInProgress()))
 	{
 		return;
 	}
@@ -111,11 +112,31 @@ void UValorCombatComponent::HandleADSInputPressed()
 		return;
 	}
 
-	// 소유 클라는 입력 의도를 바로 반영해 ADS 카메라와 반동 예측을 즉시 전환한다(서버 승인 대기 없음).
-	// 리슨 호스트는 아래 RPC가 즉시 실행되어 bIsADS가 먼저 바뀌므로, RPC 호출 뒤에 카메라를 갱신한다.
-	bLocalADSIntent = true;
-	ServerSetADSInput(true);
-	RefreshADSOnLocalClient();
+	bLocalADSButtonHeld = true;
+	if (!EquippedWeapon)
+	{
+		return;
+	}
+
+	// 우클릭이 공격인 총(클래식 3펠릿 산탄, 버키 캐니스터): 조준이 아니라 보조 발사다(한 번 누르면 한 발).
+	if (EquippedWeapon->IsAltFireAttack())
+	{
+		bLocalAltFireHeld = true;
+		bLocalFiringAltAttack = true;
+		TryFireLocalShot();
+		return;
+	}
+
+	// 조준: 저격총은 발로란트 기본처럼 토글(1단 → 2단 → 해제), 그 외 총은 누르고 있는 동안 조준(설정으로 바꿀 수 있다).
+	GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
+	const bool bToggle = EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS;
+	if (bToggle)
+	{
+		SetLocalZoomLevel(LocalZoomLevel >= EquippedWeapon->GetMaxZoomLevel() ? 0 : LocalZoomLevel + 1);
+		return;
+	}
+
+	SetLocalZoomLevel(1);
 }
 
 void UValorCombatComponent::HandleADSInputReleased()
@@ -125,8 +146,40 @@ void UValorCombatComponent::HandleADSInputReleased()
 		return;
 	}
 
-	bLocalADSIntent = false;
-	ServerSetADSInput(false);
+	bLocalADSButtonHeld = false;
+
+	// 우클릭 공격 버튼을 뗐다(반자동이라 이미 쏜 발은 그대로).
+	if (bLocalAltFireHeld)
+	{
+		bLocalAltFireHeld = false;
+		return;
+	}
+
+	const bool bToggle = EquippedWeapon && (EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS);
+	if (!bToggle)
+	{
+		GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
+		SetLocalZoomLevel(0);
+	}
+}
+
+void UValorCombatComponent::SetLocalZoomLevel(int32 NewZoomLevel)
+{
+	const int32 MaxZoomLevel = EquippedWeapon ? EquippedWeapon->GetMaxZoomLevel() : 0;
+	NewZoomLevel = FMath::Clamp(NewZoomLevel, 0, MaxZoomLevel);
+
+	const bool bWasScoped = LocalZoomLevel > 0;
+	LocalZoomLevel = NewZoomLevel;
+	const bool bScoped = LocalZoomLevel > 0;
+
+	// 소유 클라는 입력 의도를 바로 반영해 조준 카메라와 반동 예측을 즉시 전환한다(서버 승인 대기 없음).
+	// 리슨 호스트는 아래 RPC가 즉시 실행되어 bIsADS가 먼저 바뀌므로, RPC 호출 뒤에 카메라를 갱신한다.
+	bLocalADSIntent = bScoped;
+	if (bWasScoped != bScoped)
+	{
+		ServerSetADSInput(bScoped);
+	}
+
 	RefreshADSOnLocalClient();
 }
 
@@ -151,16 +204,19 @@ void UValorCombatComponent::TryFireLocalShot()
 	World->GetTimerManager().ClearTimer(LocalFireTimerHandle);
 
 	// 버퍼된 탭은 이미 떼어진 버튼이라도 한 발은 쏘고, 그 다음 연사는 버튼을 누르고 있을 때만 이어간다.
+	// 점사는 한 번 시작하면 버튼을 떼도 끝까지 쏜다(발로란트 불독·스팅어 ADS).
 	const bool bFiringBufferedShot = bFireShotBuffered;
 	bFireShotBuffered = false;
-	if ((!bLocalFireHeld && !bFiringBufferedShot) || !EquippedWeapon || bIsReloading)
+	const bool bBurstInProgress = EquippedWeapon && EquippedWeapon->IsBurstInProgress();
+	const bool bTriggerHeld = bLocalFiringAltAttack ? bLocalAltFireHeld : bLocalFireHeld;
+	if ((!bTriggerHeld && !bFiringBufferedShot && !bBurstInProgress) || !EquippedWeapon || bIsReloading)
 	{
 		return;
 	}
 
-	const double FireInterval = EquippedWeapon->GetFireInterval(IsADSForGameplay());
+	// 다음 발까지 최소 간격은 직전 발이 정한다(점사 간격/점사 사이 대기/오딘 가속). 서버도 같은 값으로 검증한다.
 	const double Now = GetSynchronizedTime();
-	const double EarliestShotTime = LastLocalShotTime + FireInterval;
+	const double EarliestShotTime = LastLocalShotTime + EquippedWeapon->GetNextShotCooldown();
 
 	// 연사 속도보다 빠르게 눌렀다면 입력을 버리지 않고 "쏠 수 있는 가장 이른 시각"으로 예약한다(탭 버퍼).
 	if (Now + KINDA_SMALL_NUMBER < EarliestShotTime)
@@ -184,6 +240,7 @@ void UValorCombatComponent::TryFireLocalShot()
 	Request.ClientShotTime = static_cast<float>(ShotTime);
 	// 조준은 카메라(뷰 펀치 포함)가 아니라 컨트롤 회전이다. ADS 반동 카메라가 조준 입력에 섞여 들어가지 않게 한다.
 	Request.AimRotation = OwnerCharacter->GetViewRotation();
+	Request.bAltFire = bLocalFiringAltAttack;
 	// 서버가 받게 될 값(압축·복원 결과)과 비트 단위로 같게 만든 뒤, 그 값으로 예측한다.
 	Request.Quantize();
 	LastLocalShotTime = Request.ClientShotTime;
@@ -200,10 +257,13 @@ void UValorCombatComponent::TryFireLocalShot()
 		ServerFireShot(Request);
 	}
 
-	if (bLocalFireHeld && EquippedWeapon && EquippedWeapon->IsAutomatic())
+	// 다음 발 예약: 점사가 남았으면 버튼과 무관하게, 아니면 자동 무기를 누르고 있을 때만(우클릭 공격은 항상 반자동).
+	const bool bContinueFiring = EquippedWeapon
+		&& (EquippedWeapon->IsBurstInProgress() || (!bLocalFiringAltAttack && bLocalFireHeld && EquippedWeapon->IsAutomatic()));
+	if (bContinueFiring)
 	{
 		// 다음 발 예약은 "지금"이 아니라 "이상적인 다음 발사 시각" 기준으로 잡아 지연이 누적되지 않게 한다.
-		const double NextShotTime = Request.ClientShotTime + FireInterval;
+		const double NextShotTime = Request.ClientShotTime + EquippedWeapon->GetNextShotCooldown();
 		const float Delay = FMath::Max(0.001f, static_cast<float>(NextShotTime - GetSynchronizedTime()));
 		World->GetTimerManager().SetTimer(LocalFireTimerHandle, this, &UValorCombatComponent::TryFireLocalShot, Delay, false);
 	}
@@ -237,30 +297,104 @@ void UValorCombatComponent::PredictLocalShot(const FValorShotRequest& Request)
 		return;
 	}
 
-	// 서버와 똑같은 함수·입력(시각, 조준, 시드 번호, 자세)으로 이번 발을 계산한다.
+	// 서버와 똑같은 함수·입력(시각, 조준, 시드 번호, 자세, 발사 모드)으로 이번 발을 계산한다.
 	// 로컬 스프레이 상태가 한 발 전진하므로 ADS 카메라 반동과 크로스헤어 탄퍼짐도 다음 프레임에 바로 반영된다.
-	const FValorShooterStance Stance = BuildShooterStance();
+	const bool bAltMode = ResolveShotAltMode(Request);
+	const bool bWasScoped = bAltMode && !EquippedWeapon->IsAltFireAttack();
+	FValorShooterStance Stance = BuildShooterStance();
+	Stance.bIsADS = bAltMode;
+
+	// 쓸 탄 수는 예측 탄약 기준으로 이 발을 쏘기 "전에" 정한다(SimulateShot이 발 번호를 올리기 전).
+	const int32 RoundsUsed = EquippedWeapon->GetRoundsForShot(bAltMode, EquippedWeapon->GetPredictedMagazineAmmo());
 	const FValorComputedShotData ShotData = EquippedWeapon->SimulateShot(Request.ClientShotTime, Stance);
+	EquippedWeapon->NotePredictedShotRounds(RoundsUsed);
+	const int32 PelletCount = EquippedWeapon->GetPelletCountForShot(bAltMode, RoundsUsed);
 
 	FVector TraceStart = FVector::ZeroVector;
 	FRotator IgnoredViewRotation = FRotator::ZeroRotator;
 	OwnerCharacter->GetWeaponViewPoint(TraceStart, IgnoredViewRotation);
 
-	const FVector ShotDirection = EquippedWeapon->ComputeShotDirection(Request.AimRotation, ShotData);
-	const FVector TraceEnd = TraceStart + (ShotDirection * EquippedWeapon->GetTraceDistance());
-
-	// 연출용 로컬 트레이스(피해 판정 아님). 서버와 같은 방향이라 벽 탄흔 위치는 서버 결과와 거의 항상 일치한다.
-	FHitResult Hit;
+	// 연출용 로컬 트레이스(피해 판정 아님). 서버와 같은 방향(같은 시드의 펠릿)이라 벽 탄흔 위치는 서버 결과와 거의 항상 일치한다.
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ValorPredictedShotTrace), false, OwnerCharacter);
 	QueryParams.AddIgnoredActor(EquippedWeapon);
-	const bool bBlockingHit = World->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
-	const bool bHitCharacter = bBlockingHit && Cast<AValorCharacter>(Hit.GetActor()) != nullptr;
 
-	PlayLocalShotPresentation(
-		bBlockingHit ? FVector(Hit.ImpactPoint) : TraceEnd,
-		bBlockingHit ? FVector(Hit.ImpactNormal) : -ShotDirection,
-		bBlockingHit,
-		bHitCharacter);
+	FValorShotEffects ShotEffects;
+	TraceShot(Request, ShotData, bAltMode, PelletCount, TraceStart, ShotEffects,
+		[World, &QueryParams](const FVector& RayStart, const FVector& RayDirection, float MaxDistance, float /*DamageDistanceOffset*/, FValorShotImpact& OutImpact)
+		{
+			const FVector RayEnd = RayStart + (RayDirection * MaxDistance);
+			FHitResult Hit;
+			OutImpact.bBlockingHit = World->LineTraceSingleByChannel(Hit, RayStart, RayEnd, ECC_Visibility, QueryParams);
+			OutImpact.bHitCharacter = OutImpact.bBlockingHit && Cast<AValorCharacter>(Hit.GetActor()) != nullptr;
+			OutImpact.ImpactPoint = OutImpact.bBlockingHit ? FVector(Hit.ImpactPoint) : RayEnd;
+			OutImpact.ImpactNormal = OutImpact.bBlockingHit ? FVector(Hit.ImpactNormal) : -RayDirection;
+			return OutImpact.bBlockingHit;
+		});
+
+	PlayLocalShotPresentation(ShotEffects);
+
+	if (bWasScoped)
+	{
+		HandleUnscopeAfterShot();
+	}
+}
+
+bool UValorCombatComponent::ResolveShotAltMode(const FValorShotRequest& Request) const
+{
+	if (!EquippedWeapon)
+	{
+		return false;
+	}
+
+	// 우클릭이 공격인 총(클래식 산탄·버키 캐니스터)은 어느 버튼으로 쐈는지(입력)를 그대로 쓴다. 두 모드 모두 정당한 선택이라 믿어도 된다.
+	// 우클릭이 조준인 총은 서버가 아는 조준 상태로 정한다(클라가 "조준 중이었다"고 주장해도 무시).
+	return EquippedWeapon->IsAltFireAttack() ? Request.bAltFire : IsADSForGameplay();
+}
+
+void UValorCombatComponent::TraceShot(const FValorShotRequest& Request, const FValorComputedShotData& ShotData, bool bAltMode, int32 PelletCount,
+	const FVector& TraceStart, FValorShotEffects& OutEffects,
+	TFunctionRef<bool(const FVector& RayStart, const FVector& RayDirection, float MaxDistance, float DamageDistanceOffset, FValorShotImpact& OutImpact)> TraceRay) const
+{
+	OutEffects = FValorShotEffects();
+	OutEffects.bAltMode = bAltMode;
+	if (!EquippedWeapon)
+	{
+		return;
+	}
+
+	const float TraceDistance = EquippedWeapon->GetTraceDistance();
+	const float AirBurstDistance = EquippedWeapon->GetAirBurstDistance();
+	PelletCount = FMath::Max(PelletCount, 1);
+
+	// 버키 우클릭: 캐니스터가 반동 방향(퍼짐 없음)으로 날아가 AirBurstDistance에서 터지고, 그 지점에서 펠릿이 퍼진다.
+	// 터지기 전에 무언가에 맞으면 터지지 않고 그 자리에 펠릿 1알 피해만 준다(위키).
+	if (bAltMode && EquippedWeapon->GetAltFireType() == EValorAltFireType::AirBurst && AirBurstDistance > 0.0f)
+	{
+		const FVector CanisterDirection = EquippedWeapon->ComputeRecoilDirection(Request.AimRotation, ShotData);
+		FValorShotImpact CanisterImpact;
+		if (TraceRay(TraceStart, CanisterDirection, AirBurstDistance, 0.0f, CanisterImpact))
+		{
+			OutEffects.Impacts.Add(CanisterImpact);
+			return;
+		}
+
+		const FVector BurstOrigin = TraceStart + (CanisterDirection * AirBurstDistance);
+		OutEffects.TracerOrigin = BurstOrigin;
+		OutEffects.bHasTracerOrigin = true;
+		for (int32 PelletIndex = 0; PelletIndex < PelletCount; ++PelletIndex)
+		{
+			FValorShotImpact& PelletImpact = OutEffects.Impacts.AddDefaulted_GetRef();
+			TraceRay(BurstOrigin, EquippedWeapon->ComputePelletDirection(Request.AimRotation, ShotData, PelletIndex), FMath::Max(TraceDistance - AirBurstDistance, 0.0f), AirBurstDistance, PelletImpact);
+		}
+		return;
+	}
+
+	// 일반 탄(1알) 또는 산탄(N알): 반동은 같고 펠릿마다 탄퍼짐 위치만 다르다.
+	for (int32 PelletIndex = 0; PelletIndex < PelletCount; ++PelletIndex)
+	{
+		FValorShotImpact& PelletImpact = OutEffects.Impacts.AddDefaulted_GetRef();
+		TraceRay(TraceStart, EquippedWeapon->ComputePelletDirection(Request.AimRotation, ShotData, PelletIndex), TraceDistance, 0.0f, PelletImpact);
+	}
 }
 
 void UValorCombatComponent::ExecuteServerFireAbility()
@@ -279,43 +413,71 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 	}
 
 	// 서버 권위 계산: 서버가 가진 스프레이 상태·자세로 반동/탄퍼짐을 직접 계산한다. 클라의 예측 결과는 받지도 쓰지도 않는다.
-	const FValorShooterStance Stance = BuildShooterStance();
+	const bool bAltMode = ResolveShotAltMode(Request);
+	const bool bWasScoped = bAltMode && !EquippedWeapon->IsAltFireAttack();
+	FValorShooterStance Stance = BuildShooterStance();
+	Stance.bIsADS = bAltMode;
+
 	const FValorComputedShotData ShotData = EquippedWeapon->SimulateShot(Request.ClientShotTime, Stance);
-	EquippedWeapon->ConsumeAmmo();
+	const int32 RoundsUsed = EquippedWeapon->ConsumeAmmoForShot(bAltMode);
+	const int32 PelletCount = EquippedWeapon->GetPelletCountForShot(bAltMode, RoundsUsed);
 	LastAcceptedShotTime = Request.ClientShotTime;
 
 	// 탄 시작점은 서버가 아는 캐릭터 카메라 위치(클라가 보낸 위치를 믿지 않음), 방향은 검증된 조준 입력 + 서버 계산 반동/탄퍼짐.
 	FVector TraceStart = FVector::ZeroVector;
 	FRotator IgnoredViewRotation = FRotator::ZeroRotator;
 	OwnerCharacter->GetWeaponViewPoint(TraceStart, IgnoredViewRotation);
-	const FVector ShotDirection = EquippedWeapon->ComputeShotDirection(Request.AimRotation, ShotData);
 
-	// 발사 시각으로 되감아 판정한다(랙 보상): 클라가 방아쇠를 당긴 순간 화면에 보이던 적 위치 기준.
-	FValorHitScanResult HitResult;
-	PerformServerHitScan(TraceStart, ShotDirection, EquippedWeapon->GetTraceDistance(), Request.ClientShotTime, HitResult);
-
-	if (HitResult.HitCharacter)
-	{
-		if (UValorAbilitySystemComponent* TargetASC = Cast<UValorAbilitySystemComponent>(HitResult.HitCharacter->GetAbilitySystemComponent()))
+	// 펠릿마다 발사 시각으로 되감아 판정하고(랙 보상), 한 대상에 맞은 펠릿 피해는 합산해 한 번에 적용한다.
+	TMap<AValorCharacter*, float> DamageByTarget;
+	const float ShotTime = Request.ClientShotTime;
+	FValorShotEffects ShotEffects;
+	TraceShot(Request, ShotData, bAltMode, PelletCount, TraceStart, ShotEffects,
+		[this, ShotTime, &DamageByTarget](const FVector& RayStart, const FVector& RayDirection, float MaxDistance, float DamageDistanceOffset, FValorShotImpact& OutImpact)
 		{
-			float Damage = EquippedWeapon->ComputeDamage(HitResult.TravelDistance, HitResult.HitZone);
-			if (HitResult.bPenetratedSurface)
+			FValorHitScanResult HitResult;
+			PerformServerHitScan(RayStart, RayDirection, MaxDistance, ShotTime, HitResult);
+
+			if (HitResult.HitCharacter)
 			{
-				Damage *= EquippedWeapon->GetPenetrationDamageMultiplier();
+				// 피해 거리 = 사수로부터의 거리(버키 캐니스터 펠릿은 폭발 지점까지의 거리를 더한다).
+				float Damage = EquippedWeapon->ComputeDamage(HitResult.TravelDistance + DamageDistanceOffset, HitResult.HitZone);
+				if (HitResult.bPenetratedSurface)
+				{
+					Damage *= EquippedWeapon->GetPenetrationDamageMultiplier();
+				}
+
+				DamageByTarget.FindOrAdd(HitResult.HitCharacter) += Damage;
 			}
 
-			TargetASC->ApplyModToAttribute(UValorCombatAttributeSet::GetIncomingDamageAttribute(), EGameplayModOp::Additive, Damage);
+			OutImpact.ImpactPoint = HitResult.ImpactPoint;
+			OutImpact.ImpactNormal = HitResult.ImpactNormal;
+			OutImpact.bBlockingHit = HitResult.bBlockingHit || HitResult.HitCharacter != nullptr;
+			OutImpact.bHitCharacter = HitResult.HitCharacter != nullptr;
+			return OutImpact.bBlockingHit;
+		});
+
+	for (const TPair<AValorCharacter*, float>& TargetDamage : DamageByTarget)
+	{
+		if (UValorAbilitySystemComponent* TargetASC = Cast<UValorAbilitySystemComponent>(TargetDamage.Key->GetAbilitySystemComponent()))
+		{
+			TargetASC->ApplyModToAttribute(UValorCombatAttributeSet::GetIncomingDamageAttribute(), EGameplayModOp::Additive, TargetDamage.Value);
 		}
 	}
 
 	// 연출: 로컬 사수가 곧 서버인 리슨 호스트는 여기서 바로 재생하고, 나머지 클라는 멀티캐스트로 받는다.
-	const bool bHitCharacter = HitResult.HitCharacter != nullptr;
 	if (OwnerCharacter->IsLocallyControlled())
 	{
-		PlayLocalShotPresentation(HitResult.ImpactPoint, HitResult.ImpactNormal, HitResult.bBlockingHit, bHitCharacter);
+		PlayLocalShotPresentation(ShotEffects);
 	}
 
-	MulticastSimulateFire(HitResult.ImpactPoint, HitResult.ImpactNormal, HitResult.bBlockingHit, bHitCharacter);
+	MulticastSimulateFire(ShotEffects);
+
+	// 오퍼레이터·마샬: 쏘면 조준이 풀린다(서버가 조준 상태를 확정한다. 다음 발은 다시 조준하기 전까지 비조준 정확도).
+	if (bWasScoped)
+	{
+		HandleUnscopeAfterShot();
+	}
 }
 
 bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
@@ -327,7 +489,9 @@ bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
 	}
 
 	const double ServerNow = World->GetTimeSeconds();
-	const double FireInterval = EquippedWeapon->GetFireInterval(IsADSForGameplay());
+
+	// 직전 승인 발이 정한 "다음 발까지 최소 간격"(점사 간격/점사 사이 대기/오딘 가속 반영). 클라도 같은 값으로 발사를 예약한다.
+	const double FireInterval = FMath::Max(static_cast<double>(EquippedWeapon->GetNextShotCooldown()), 0.0);
 
 	// (1) 발사 시각 범위: 너무 먼 과거(되감기 한도 밖)나 미래 시각은 허용 범위로 끌어온다.
 	//     클라 시계(GameState 동기화 시간)는 서버보다 약간 뒤처지는 것이 정상이므로 과거 쪽은 되감기 한도까지 허용한다.
@@ -350,7 +514,8 @@ bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
 	}
 
 	// (3) 실제 수신 속도 제한(토큰 버킷): 시각을 위조해 간격을 벌려도 "초당 도착한 발 수"는 속일 수 없다.
-	const double RefillPerSecond = (1.0 / FireInterval) * 1.1;
+	//     점사 안 속도(스팅어 18발/초)·가속 최고 속도(오딘 15.6)까지 허용해야 정상 점사가 거부되지 않는다.
+	const double RefillPerSecond = static_cast<double>(EquippedWeapon->GetMaxFireRate()) * 1.1;
 	ShotRateTokens = FMath::Min<double>(ShotRateBurstCapacity, ShotRateTokens + FMath::Max(0.0, ServerNow - LastShotRateRefillTime) * RefillPerSecond);
 	LastShotRateRefillTime = ServerNow;
 	if (ShotRateTokens < 1.0)
@@ -398,7 +563,7 @@ void UValorCombatComponent::RejectShot(const TCHAR* Reason, bool bSuspicious)
 	UE_LOG(LogValorCombat, Verbose, TEXT("[발사 검증] %s 발사 거부: %s"), *GetNameSafe(OwnerCharacter), Reason);
 }
 
-void UValorCombatComponent::PlayLocalShotPresentation(const FVector& ImpactPoint, const FVector& ImpactNormal, bool bBlockingHit, bool bHitCharacter)
+void UValorCombatComponent::PlayLocalShotPresentation(const FValorShotEffects& ShotEffects)
 {
 	// 애니메이션 인스턴스가 발사 몽타주를 한 번 재생할 수 있도록 로컬 발사 시각을 남긴다.
 	if (const UWorld* World = GetWorld())
@@ -411,7 +576,7 @@ void UValorCombatComponent::PlayLocalShotPresentation(const FVector& ImpactPoint
 		return;
 	}
 
-	EquippedWeapon->PlayFireEffects(ImpactPoint, ImpactNormal, bBlockingHit, bHitCharacter);
+	EquippedWeapon->PlayFireEffects(ShotEffects);
 
 	// 사수 본인 화면만 매 발 튀게 한다(발로란트의 사격 시 화면 흔들림). 예측 클라는 발사 입력 프레임에 바로 실행되므로
 	// 서버 왕복을 기다리지 않고 킥이 즉시 나온다. 조준(컨트롤 회전)은 건드리지 않는 순수 연출이다.
@@ -419,7 +584,7 @@ void UValorCombatComponent::PlayLocalShotPresentation(const FVector& ImpactPoint
 	{
 		if (UValorCameraComponent* CameraLogicComponent = OwnerCharacter->GetCameraLogicComponent())
 		{
-			CameraLogicComponent->AddFireKick(EquippedWeapon->GetCameraKickConfig(IsADSForGameplay()));
+			CameraLogicComponent->AddFireKick(EquippedWeapon->GetCameraKickConfig(ShotEffects.bAltMode));
 		}
 	}
 }
@@ -443,7 +608,8 @@ void UValorCombatComponent::SetADSStateFromAbility(bool bNewADS)
 		return;
 	}
 
-	bIsADS = bNewADS && EquippedWeapon != nullptr && !bIsReloading;
+	// 조준할 수 없는 총(우클릭이 공격이거나 없는 총)은 조준 요청을 받아도 조준 상태가 되지 않는다(서버 검증).
+	bIsADS = bNewADS && EquippedWeapon != nullptr && EquippedWeapon->GetMaxZoomLevel() > 0 && !bIsReloading;
 	RefreshADSOnLocalClient();
 }
 
@@ -513,8 +679,40 @@ bool UValorCombatComponent::GetCurrentSprayEvaluation(FValorSprayEvaluation& Out
 	}
 
 	OutStance = BuildShooterStance();
+
+	// 우클릭이 공격인 총(클래식·버키)은 마지막으로 쏜 모드의 반동 규칙으로 평가해야 카메라 복귀와 크로스헤어가 그 발과 맞는다.
+	if (EquippedWeapon->IsAltFireAttack())
+	{
+		OutStance.bIsADS = EquippedWeapon->WasLastShotAltMode();
+	}
+
 	OutEvaluation = EquippedWeapon->EvaluateSpray(GetSynchronizedTime(), OutStance);
 	return true;
+}
+
+int32 UValorCombatComponent::GetDisplayedMagazineAmmo() const
+{
+	return EquippedWeapon ? EquippedWeapon->GetPredictedMagazineAmmo() : 0;
+}
+
+int32 UValorCombatComponent::GetDisplayedReserveAmmo() const
+{
+	return EquippedWeapon ? EquippedWeapon->GetCurrentReserveAmmo() : 0;
+}
+
+FText UValorCombatComponent::GetEquippedWeaponDisplayName() const
+{
+	return EquippedWeapon ? EquippedWeapon->GetWeaponConfig().DisplayName : FText::GetEmpty();
+}
+
+int32 UValorCombatComponent::GetZoomLevel() const
+{
+	return IsADSForGameplay() ? FMath::Max(LocalZoomLevel, 1) : 0;
+}
+
+bool UValorCombatComponent::IsScopeOverlayActive() const
+{
+	return EquippedWeapon && EquippedWeapon->UsesScopeOverlay() && IsADSForGameplay();
 }
 
 FRotator UValorCombatComponent::GetCameraRecoilOffset() const
@@ -581,7 +779,7 @@ void UValorCombatComponent::ServerInteractWithPickup_Implementation()
 	}
 }
 
-void UValorCombatComponent::MulticastSimulateFire_Implementation(FVector_NetQuantize ImpactPoint, FVector_NetQuantizeNormal ImpactNormal, bool bBlockingHit, bool bHitCharacter)
+void UValorCombatComponent::MulticastSimulateFire_Implementation(const FValorShotEffects& ShotEffects)
 {
 	if (!OwnerCharacter || GetNetMode() == NM_DedicatedServer)
 	{
@@ -601,7 +799,7 @@ void UValorCombatComponent::MulticastSimulateFire_Implementation(FVector_NetQuan
 
 	if (EquippedWeapon)
 	{
-		EquippedWeapon->PlayFireEffects(ImpactPoint, ImpactNormal, bBlockingHit, bHitCharacter);
+		EquippedWeapon->PlayFireEffects(ShotEffects);
 	}
 }
 
@@ -623,10 +821,13 @@ void UValorCombatComponent::OnRep_EquippedWeapon(AValorWeaponBase* PreviousWeapo
 		PreviousWeapon->OnUnequipped();
 	}
 
-	// 서버는 교체할 때 조준을 해제한다. 소유 클라도 조준 의도를 지워 서버와 같은 상태(힙)로 예측한다.
+	// 서버는 교체할 때 조준을 해제한다. 소유 클라도 조준 의도·줌 단계를 지워 서버와 같은 상태(힙)로 예측한다.
 	if (PreviousWeapon != EquippedWeapon && OwnerCharacter && OwnerCharacter->IsLocallyControlled())
 	{
 		bLocalADSIntent = false;
+		LocalZoomLevel = 0;
+		bLocalAltFireHeld = false;
+		GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
 	}
 
 	ApplyEquippedWeaponAttachment();
@@ -679,7 +880,56 @@ void UValorCombatComponent::EquipWeapon(AValorWeaponBase* NewWeapon)
 	if (OwnerCharacter && OwnerCharacter->IsLocallyControlled())
 	{
 		bLocalADSIntent = false;
+		LocalZoomLevel = 0;
+		bLocalAltFireHeld = false;
+		GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
 		RefreshADSOnLocalClient();
+	}
+}
+
+void UValorCombatComponent::HandleUnscopeAfterShot()
+{
+	if (!EquippedWeapon || !EquippedWeapon->ShouldUnscopeAfterShot() || !GetOwner())
+	{
+		return;
+	}
+
+	// 서버: 조준 어빌리티를 끝내 bIsADS를 false로 확정한다(복제). 다음 발은 다시 조준하기 전까지 비조준 정확도다.
+	// 원격 클라가 곧바로 우클릭으로 재조준해도, 신뢰성 RPC는 같은 액터에서 순서가 보장되므로 "발사 → 해제 → 재조준" 순서가 유지된다.
+	if (GetOwner()->HasAuthority() && AbilitySystemComponent && ADSAbilityHandle.IsValid())
+	{
+		AbilitySystemComponent->CancelAbilityHandle(ADSAbilityHandle);
+	}
+
+	// 로컬 사수(예측 클라/리슨 호스트): 서버 결과를 기다리지 않고 줌을 푼다. "자동 재조준" 설정이면 장전(발사 간격)이 끝나는 대로 되돌린다.
+	if (OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+	{
+		const int32 ZoomLevelBeforeShot = FMath::Max(LocalZoomLevel, 1);
+		LocalZoomLevel = 0;
+		bLocalADSIntent = false;
+		RefreshADSOnLocalClient();
+
+		if (bAutoReScopeAfterShot)
+		{
+			PendingReScopeZoomLevel = ZoomLevelBeforeShot;
+			const float ReScopeDelay = FMath::Max(EquippedWeapon->GetNextShotCooldown(), 0.05f);
+			GetWorld()->GetTimerManager().SetTimer(ReScopeTimerHandle, this, &UValorCombatComponent::ReScopeAfterShot, ReScopeDelay, false);
+		}
+	}
+}
+
+void UValorCombatComponent::ReScopeAfterShot()
+{
+	if (!EquippedWeapon || bIsReloading || LocalZoomLevel > 0)
+	{
+		return;
+	}
+
+	// 누르고 있는 동안 조준 방식이면 아직 우클릭을 누르고 있을 때만 다시 조준한다.
+	const bool bToggle = EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS;
+	if (bToggle || bLocalADSButtonHeld)
+	{
+		SetLocalZoomLevel(PendingReScopeZoomLevel);
 	}
 }
 
@@ -775,13 +1025,23 @@ void UValorCombatComponent::RefreshADSOnLocalClient() const
 		return;
 	}
 
-	if (IsADSForGameplay() && EquippedWeapon)
+	const bool bScoped = IsADSForGameplay() && EquippedWeapon;
+	if (bScoped)
 	{
-		CameraLogicComponent->SetADSState(true, EquippedWeapon->GetADSFieldOfView(CameraLogicComponent->GetHipFireFOV()), EquippedWeapon->GetADSInterpSpeed());
-		return;
+		// 줌 단계별 FOV(오퍼레이터 1단 2.5배 / 2단 5배). 리슨 호스트도 로컬 줌 단계를 쓴다(서버 판정은 조준 여부만 본다).
+		const float ZoomFieldOfView = EquippedWeapon->GetZoomFieldOfView(CameraLogicComponent->GetHipFireFOV(), FMath::Max(LocalZoomLevel, 1));
+		CameraLogicComponent->SetADSState(true, ZoomFieldOfView, EquippedWeapon->GetADSInterpSpeed());
+	}
+	else
+	{
+		CameraLogicComponent->SetADSState(false, 0.0f, 0.0f);
 	}
 
-	CameraLogicComponent->SetADSState(false, 0.0f, 0.0f);
+	// 조준경 화면(저격총)일 때는 1인칭 총을 숨긴다. 조준경 자체는 HUD가 그린다.
+	if (EquippedWeapon)
+	{
+		EquippedWeapon->SetScopedViewHidden(bScoped && EquippedWeapon->UsesScopeOverlay());
+	}
 }
 
 void UValorCombatComponent::FinishReload()
