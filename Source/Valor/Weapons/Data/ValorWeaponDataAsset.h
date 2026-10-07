@@ -486,6 +486,13 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Scope")
 	bool bUnscopeAfterShot = false;
 
+	// 조준(ADS)으로 총을 올리는 동안 발사 입력을 미루는 시간(초). 0이면 지연 없음.
+	// 4.07 패치: "Bulldog and Stinger now delay firing inputs while bringing up the weapon to ADS" —
+	// 총을 다 올리기 전에 점사 정확도를 얻지 못하게 하고, 전투 중 점사로 바꾸는 데 약간의 비용을 준다.
+	// 조준을 풀고 연사로 돌아갈 때는 지연이 없다. 지연 길이는 공개되지 않아 불독·스팅어 값은 추정치다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Scope", meta=(ClampMin="0.0"))
+	float ADSFireDelaySeconds = 0.0f;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.1"))
 	float ADSInterpSpeed = 18.0f;
 

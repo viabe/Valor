@@ -3,6 +3,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "DrawDebugHelpers.h"
+#include "Engine/Engine.h"
 #include "HAL/IConsoleManager.h"
 #include "Interfaces/ValorWeaponOwnerInterface.h"
 #include "Kismet/GameplayStatics.h"
@@ -30,6 +31,41 @@ namespace
 		-1.0f,
 		TEXT("0~1이면 힙파이어 CameraRecoilFollowRatio를 이 값으로 덮어쓴다(비교용). 음수면 데이터 자산 값을 쓴다."),
 		ECVF_Cheat);
+
+#if !UE_BUILD_SHIPPING
+	// 개발 중 설정 실수 확인: 무기 BP 이름에 총 이름이 들어 있는데 데이터 에셋은 다른 총인 경우(예: BP_STINGER가 DA_Vandal을 가리킴).
+	// 이 경우 총이 엉뚱한 수치(점사 없는 연사 등)로 동작하는데 화면만 봐서는 원인을 알기 어려워, 로그와 화면에 바로 알린다.
+	void WarnIfWeaponDataLooksMismatched(const AValorWeaponBase& Weapon)
+	{
+		static const TCHAR* const KnownWeaponNames[] =
+		{
+			TEXT("Classic"), TEXT("Shorty"), TEXT("Frenzy"), TEXT("Ghost"), TEXT("Bandit"), TEXT("Sheriff"),
+			TEXT("Stinger"), TEXT("Spectre"), TEXT("Bucky"), TEXT("Judge"), TEXT("Bulldog"), TEXT("Guardian"),
+			TEXT("Phantom"), TEXT("Vandal"), TEXT("Warden"), TEXT("Marshal"), TEXT("Outlaw"), TEXT("Operator"),
+			TEXT("Ares"), TEXT("Odin")
+		};
+
+		const FString ClassName = Weapon.GetClass()->GetName();
+		const FName ConfiguredWeaponId = Weapon.GetWeaponConfig().WeaponId;
+		for (const TCHAR* KnownWeaponName : KnownWeaponNames)
+		{
+			if (!ClassName.Contains(KnownWeaponName, ESearchCase::IgnoreCase) || ConfiguredWeaponId == FName(KnownWeaponName))
+			{
+				continue;
+			}
+
+			const FString Message = FString::Printf(
+				TEXT("[무기 설정 확인] %s 가 '%s' 데이터로 동작 중 — Weapon Data Asset을 DA_%s로 지정했는지 확인"),
+				*ClassName, *ConfiguredWeaponId.ToString(), KnownWeaponName);
+			UE_LOG(LogTemp, Warning, TEXT("%s"), *Message);
+			if (GEngine && Weapon.GetNetMode() != NM_DedicatedServer)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 10.0f, FColor::Orange, Message);
+			}
+			return;
+		}
+	}
+#endif
 }
 
 AValorWeaponBase::AValorWeaponBase()
@@ -67,6 +103,10 @@ void AValorWeaponBase::BeginPlay()
 		const FGuid SeedSource = FGuid::NewGuid();
 		RecoilSeed = static_cast<int32>(SeedSource.A ^ SeedSource.B ^ SeedSource.C ^ SeedSource.D);
 	}
+
+#if !UE_BUILD_SHIPPING
+	WarnIfWeaponDataLooksMismatched(*this);
+#endif
 }
 
 void AValorWeaponBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -459,6 +499,11 @@ bool AValorWeaponBase::ShouldUnscopeAfterShot() const
 bool AValorWeaponBase::IsSniper() const
 {
 	return GetWeaponConfig().Category == EValorWeaponCategory::Sniper;
+}
+
+float AValorWeaponBase::GetADSFireDelay() const
+{
+	return FMath::Max(GetWeaponConfig().ADSFireDelaySeconds, 0.0f);
 }
 
 void AValorWeaponBase::SetScopedViewHidden(bool bHideForScope)

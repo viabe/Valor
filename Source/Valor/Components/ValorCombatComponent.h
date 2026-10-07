@@ -184,14 +184,15 @@ protected:
 	float DropGroundSearchDepth = 400.0f;
 
 	// === 조준 입력 방식(발로란트 설정 메뉴의 항목들. 나중에 설정 UI/세이브 데이터로 옮길 값) ===
+	// 발로란트 기본값은 둘 다 토글이다: 우클릭 한 번으로 조준(불독·스팅어는 점사 모드)에 들어가고, 한 번 더 누르면 풀린다.
 
-	// 저격총 조준: true = 토글(발로란트 기본). 우클릭할 때마다 1단 → 2단(오퍼레이터) → 해제. false = 누르고 있는 동안 1단.
+	// 저격총 조준: true = 토글(기본). 우클릭할 때마다 1단 → 2단(오퍼레이터) → 해제. false = 누르고 있는 동안 1단.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
 	bool bToggleSniperZoom = true;
 
-	// 그 외 총의 ADS: false = 누르고 있는 동안(기본), true = 토글.
+	// 그 외 총의 ADS: true = 토글(기본), false = 누르고 있는 동안만 조준.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
-	bool bToggleADS = false;
+	bool bToggleADS = true;
 
 	// 쏘면 조준이 풀리는 저격총(오퍼레이터·마샬)을 장전이 끝나는 대로 다시 조준한다(발로란트 "자동 재조준" 설정).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
@@ -261,6 +262,13 @@ private:
 	// 로컬 줌 단계를 바꾼다(소유 클라/리슨 호스트). 조준 on/off가 바뀔 때만 서버에 알린다(1단↔2단은 화면만 바뀜).
 	void SetLocalZoomLevel(int32 NewZoomLevel);
 
+	// 지금 든 총이 토글 조준 방식인지(저격총 설정/일반 ADS 설정).
+	bool UsesToggleZoom() const;
+
+	// 재장전이 시작되면 토글 조준을 푼다(발로란트: 재장전은 조준을 끊고, 끝난 뒤 다시 우클릭해야 조준한다).
+	// 누르고 있는 방식이면 재장전 동안만 조준이 꺼졌다가 버튼을 계속 누르고 있으면 다시 조준된다.
+	void ExitToggledZoomForReload();
+
 	// 서버 전용: 새 총을 장착한다. 이미 들고 있던 총은 DropEquippedWeapon으로 바닥에 떨어뜨린다(발로란트식 교체).
 	void EquipWeapon(AValorWeaponBase* NewWeapon);
 
@@ -301,6 +309,9 @@ private:
 
 	// 로컬 줌 단계(0 = 비조준, 1 = 1단, 2 = 2단). 화면 FOV와 조준경 UI에만 쓰는 값이라 복제하지 않는다.
 	int32 LocalZoomLevel = 0;
+
+	// 조준을 시작한 시각(동기화 시간). 불독·스팅어는 여기서 ADSFireDelay가 지날 때까지 발사 입력을 미룬다(4.07).
+	double LocalADSStartTime = -1000.0;
 
 	// 우클릭 버튼이 눌려 있는지(누르고 있는 동안 조준/자동 재조준 판단용).
 	bool bLocalADSButtonHeld = false;

@@ -127,16 +127,32 @@ void UValorCombatComponent::HandleADSInputPressed()
 		return;
 	}
 
-	// 조준: 저격총은 발로란트 기본처럼 토글(1단 → 2단 → 해제), 그 외 총은 누르고 있는 동안 조준(설정으로 바꿀 수 있다).
+	// 조준: 발로란트 기본처럼 토글(누를 때마다 조준 ↔ 해제, 오퍼레이터는 1단 → 2단 → 해제).
+	// 설정에서 "누르고 있는 동안" 방식으로 바꾸면 누르는 동안만 1단으로 조준한다.
 	GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
-	const bool bToggle = EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS;
-	if (bToggle)
+	if (UsesToggleZoom())
 	{
 		SetLocalZoomLevel(LocalZoomLevel >= EquippedWeapon->GetMaxZoomLevel() ? 0 : LocalZoomLevel + 1);
 		return;
 	}
 
 	SetLocalZoomLevel(1);
+}
+
+bool UValorCombatComponent::UsesToggleZoom() const
+{
+	return EquippedWeapon && (EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS);
+}
+
+void UValorCombatComponent::ExitToggledZoomForReload()
+{
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled() || !bIsReloading || LocalZoomLevel <= 0 || !UsesToggleZoom())
+	{
+		return;
+	}
+
+	GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
+	SetLocalZoomLevel(0);
 }
 
 void UValorCombatComponent::HandleADSInputReleased()
@@ -155,8 +171,7 @@ void UValorCombatComponent::HandleADSInputReleased()
 		return;
 	}
 
-	const bool bToggle = EquippedWeapon && (EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS);
-	if (!bToggle)
+	if (!UsesToggleZoom())
 	{
 		GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
 		SetLocalZoomLevel(0);
@@ -171,6 +186,12 @@ void UValorCombatComponent::SetLocalZoomLevel(int32 NewZoomLevel)
 	const bool bWasScoped = LocalZoomLevel > 0;
 	LocalZoomLevel = NewZoomLevel;
 	const bool bScoped = LocalZoomLevel > 0;
+
+	// 조준을 새로 시작한 시각(총을 올리기 시작한 시각). 불독·스팅어는 여기서 ADSFireDelay가 지나야 쏠 수 있다.
+	if (bScoped && !bWasScoped)
+	{
+		LocalADSStartTime = GetSynchronizedTime();
+	}
 
 	// 소유 클라는 입력 의도를 바로 반영해 조준 카메라와 반동 예측을 즉시 전환한다(서버 승인 대기 없음).
 	// 리슨 호스트는 아래 RPC가 즉시 실행되어 bIsADS가 먼저 바뀌므로, RPC 호출 뒤에 카메라를 갱신한다.
@@ -216,7 +237,14 @@ void UValorCombatComponent::TryFireLocalShot()
 
 	// 다음 발까지 최소 간격은 직전 발이 정한다(점사 간격/점사 사이 대기/오딘 가속). 서버도 같은 값으로 검증한다.
 	const double Now = GetSynchronizedTime();
-	const double EarliestShotTime = LastLocalShotTime + EquippedWeapon->GetNextShotCooldown();
+	double EarliestShotTime = LastLocalShotTime + EquippedWeapon->GetNextShotCooldown();
+
+	// 4.07: 불독·스팅어는 조준(점사 모드)으로 총을 올리는 동안 발사 입력을 미룬다. 입력은 버리지 않고 다 올린 순간 쏜다.
+	// 조준을 풀고 연사로 돌아갈 때는 지연이 없다(조준 시작 시각만 기준으로 삼는다).
+	if (!bLocalFiringAltAttack && IsADSForGameplay() && EquippedWeapon->GetADSFireDelay() > 0.0f)
+	{
+		EarliestShotTime = FMath::Max(EarliestShotTime, LocalADSStartTime + EquippedWeapon->GetADSFireDelay());
+	}
 
 	// 연사 속도보다 빠르게 눌렀다면 입력을 버리지 않고 "쏠 수 있는 가장 이른 시각"으로 예약한다(탭 버퍼).
 	if (Now + KINDA_SMALL_NUMBER < EarliestShotTime)
@@ -599,6 +627,9 @@ void UValorCombatComponent::ExecuteServerReloadAbility()
 	bIsReloading = true;
 	MulticastPlayReloadCue();
 	GetWorld()->GetTimerManager().SetTimer(ReloadTimerHandle, this, &UValorCombatComponent::FinishReload, EquippedWeapon->GetReloadDuration(), false);
+
+	// 리슨 서버 호스트는 OnRep_IsReloading이 오지 않으므로 여기서 토글 조준을 푼다(원격 클라는 OnRep에서 푼다).
+	ExitToggledZoomForReload();
 }
 
 void UValorCombatComponent::SetADSStateFromAbility(bool bNewADS)
@@ -841,7 +872,8 @@ void UValorCombatComponent::OnRep_IsADS()
 
 void UValorCombatComponent::OnRep_IsReloading()
 {
-	// 재장전 시작 시에는 ADS가 풀리고(IsADSForGameplay가 false), 끝나면 우클릭 유지 여부에 따라 다시 조준한다.
+	// 재장전 시작: 토글 조준은 풀린다(다시 우클릭해야 조준). 누르고 있는 방식이면 재장전 동안만 꺼졌다가 버튼을 유지하면 다시 조준된다.
+	ExitToggledZoomForReload();
 	RefreshADSOnLocalClient();
 }
 
@@ -926,8 +958,7 @@ void UValorCombatComponent::ReScopeAfterShot()
 	}
 
 	// 누르고 있는 동안 조준 방식이면 아직 우클릭을 누르고 있을 때만 다시 조준한다.
-	const bool bToggle = EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS;
-	if (bToggle || bLocalADSButtonHeld)
+	if (UsesToggleZoom() || bLocalADSButtonHeld)
 	{
 		SetLocalZoomLevel(PendingReScopeZoomLevel);
 	}

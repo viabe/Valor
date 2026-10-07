@@ -201,6 +201,7 @@ bool FValorWeaponPresetOfficialTest::RunTest(const FString& Parameters)
 		const FValorFireModeStats& Burst = Bulldog->Config.AltFire;
 		const float BurstGap = Burst.BurstCount / Burst.FireRate - Burst.BurstCount / Burst.BurstFireRate;
 		TestEqual(TEXT("불독 점사 사이 대기 0.25초"), BurstGap, 0.25f, 1.0e-3f);
+		TestTrue(TEXT("불독은 조준 직후 발사 지연이 있다(4.07)"), Bulldog->Config.ADSFireDelaySeconds > 0.0f);
 	}
 
 	if (const FValorWeaponPreset* Stinger = FindPreset(Presets, TEXT("Stinger")))
@@ -209,6 +210,7 @@ bool FValorWeaponPresetOfficialTest::RunTest(const FString& Parameters)
 		const float BurstGap = Burst.BurstCount / Burst.FireRate - Burst.BurstCount / Burst.BurstFireRate;
 		TestEqual(TEXT("스팅어 점사 사이 대기 0.25초"), BurstGap, 0.25f, 1.0e-3f);
 		TestTrue(TEXT("스팅어 점사는 별도 반동 규칙(회복 0.4초)"), Stinger->Config.bUseSeparateAltFireRecoil && FMath::IsNearlyEqual(Stinger->Config.AltFireRecoilProfile.GunRecoveryTime, 0.4f));
+		TestTrue(TEXT("스팅어는 조준 직후 발사 지연이 있다(4.07)"), Stinger->Config.ADSFireDelaySeconds > 0.0f);
 	}
 
 	return true;

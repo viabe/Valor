@@ -140,6 +140,9 @@ public:
 	bool ShouldUnscopeAfterShot() const;
 	bool IsSniper() const;
 
+	// 조준을 시작한 뒤 쏠 수 있을 때까지의 지연(초, 불독·스팅어 점사 모드).
+	float GetADSFireDelay() const;
+
 	// 로컬 전용: 조준경 화면일 때 1인칭 총 메시를 숨긴다(가시성은 복제되지 않으므로 다른 플레이어 화면에는 영향 없음).
 	void SetScopedViewHidden(bool bHideForScope);
 
