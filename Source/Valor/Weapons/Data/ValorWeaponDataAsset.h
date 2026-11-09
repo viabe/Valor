@@ -189,7 +189,8 @@ struct FValorFireModeStats
 	// 이 모드로 들고 있을 때 이동 속도 배율. valorant-api runSpeedMultiplier.
 	// 힙 = 칼(6.75m/s) 대비(밴달 0.8 → 5.4m/s), ADS = 그 무기 힙 이동 속도 대비(밴달 0.76 → 5.4 × 0.76 = 4.1m/s).
 	// ADS가 "힙 대비"라는 근거: 위키 표기 "Move Speed 76% (4.104 m/sec)", 2.03 패치 "마샬 줌 이동 속도: 줌 해제 속도의 76% → 90%".
-	// [구현 예정] 캐릭터 이동 속도에는 아직 반영하지 않는다.
+	// UValorCharacterMovementComponent가 이동 예측과 함께 적용한다(AValorWeaponBase::GetMoveSpeedMultiplier).
+	// 우클릭이 공격인 총(클래식·버키)의 AltFire 값은 이동 속도에 쓰지 않는다(조준이 아니므로).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FireMode", meta=(ClampMin="0.1", ClampMax="1.0"))
 	float MoveSpeedMultiplier = 0.8f;
 
@@ -416,7 +417,8 @@ struct VALOR_API FValorWeaponConfig
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0"))
 	int32 Cost = 2900;
 
-	// 무기를 꺼내 쏠 수 있을 때까지의 시간(초, "Normal" 장착 속도). valorant-api equipTimeSeconds. [구현 예정]
+	// 무기를 꺼내 쏠 수 있을 때까지의 시간(초, "Normal" 장착 속도). valorant-api equipTimeSeconds.
+	// 장착이 끝나기 전에는 발사·조준·재장전이 안 된다(서버가 발사 시각으로 검증).
 	// 위키에는 Fast/Instant 장착 속도도 있으나 적용 조건이 공개돼 있지 않아 담지 않는다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon", meta=(ClampMin="0.0"))
 	float EquipTimeSeconds = 1.0f;

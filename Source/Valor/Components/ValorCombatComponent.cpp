@@ -9,6 +9,7 @@
 #include "AbilitySystem/ValorGameplayTags.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/ValorCameraComponent.h"
+#include "Components/ValorCharacterMovementComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -16,6 +17,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
 #include "ValorCharacter.h"
+#include "Weapons/ValorMeleeWeapon.h"
 #include "Weapons/ValorWeaponBase.h"
 #include "World/ValorWeaponPickup.h"
 
@@ -25,6 +27,12 @@ namespace
 {
 	// 연사 타이머가 프레임 경계 때문에 늦게 불린 경우, 이 시간(초) 이내면 발사 시각을 "이상적인 연사 시각"으로 맞춘다.
 	constexpr double MaxScheduleSlackSeconds = 0.05;
+
+	// 발사 시각과 장착 완료 시각 비교의 허용 오차(초). 둘 다 float로 오가며 생기는 반올림 차이만 흡수한다(조작 여지 10ms).
+	constexpr double EquipReadyToleranceSeconds = 0.01;
+
+	// "장착 시간 없이 바로 쓸 수 있음"을 나타내는 장착 시작 시각(스폰 지급).
+	constexpr float InstantEquipStartTime = -1000.0f;
 }
 
 UValorCombatComponent::UValorCombatComponent()
@@ -37,6 +45,7 @@ UValorCombatComponent::UValorCombatComponent()
 	ReloadAbilityClass = UUGA_WeaponReload::StaticClass();
 	ADSAbilityClass = UUGA_WeaponADS::StaticClass();
 	DroppedWeaponPickupClass = AValorWeaponPickup::StaticClass();
+	MeleeWeaponClass = AValorMeleeWeapon::StaticClass();
 }
 
 void UValorCombatComponent::BeginPlay()
@@ -45,13 +54,36 @@ void UValorCombatComponent::BeginPlay()
 
 	OwnerCharacter = Cast<AValorCharacter>(GetOwner());
 	ShotRateTokens = ShotRateBurstCapacity;
+	LocalEquipState = EquipState;
+
+	// 칼은 모든 캐릭터가 항상 갖는다. 서버가 스폰하면 소유자 관련성으로 클라에 복제된다.
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		EnsureMeleeWeapon();
+	}
+
+	RefreshActiveEquipment();
+}
+
+void UValorCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// 시체가 사라지거나 플레이어가 나가 캐릭터가 파괴되면, 남아 있던 총·칼 액터도 같이 없앤다(소유자가 사라진 무기가 월드에 남지 않게).
+	if (EndPlayReason == EEndPlayReason::Destroyed && GetOwner() && GetOwner()->HasAuthority())
+	{
+		DestroyInventory();
+	}
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void UValorCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(UValorCombatComponent, EquippedWeapon);
+	DOREPLIFETIME(UValorCombatComponent, PrimaryWeapon);
+	DOREPLIFETIME(UValorCombatComponent, SecondaryWeapon);
+	DOREPLIFETIME(UValorCombatComponent, MeleeWeapon);
+	DOREPLIFETIME(UValorCombatComponent, EquipState);
 	DOREPLIFETIME(UValorCombatComponent, bIsADS);
 	DOREPLIFETIME(UValorCombatComponent, bIsReloading);
 }
@@ -104,6 +136,12 @@ void UValorCombatComponent::HandleReloadInputPressed()
 		return;
 	}
 
+	// 칼을 들었거나 아직 꺼내는 중이면 재장전하지 않는다(서버도 같은 조건으로 거부한다).
+	if (!EquippedWeapon || !IsEquipReady())
+	{
+		return;
+	}
+
 	ServerRequestReload();
 }
 
@@ -126,6 +164,12 @@ void UValorCombatComponent::HandleADSInputPressed()
 		bLocalAltFireHeld = true;
 		bLocalFiringAltAttack = true;
 		TryFireLocalShot();
+		return;
+	}
+
+	// 총을 다 꺼내기 전에는 조준하지 않는다(서버도 장착 완료 전 조준 요청은 받아들이지 않는다).
+	if (!IsEquipReady())
+	{
 		return;
 	}
 
@@ -216,6 +260,70 @@ void UValorCombatComponent::HandleInteractInputPressed()
 	ServerInteractWithPickup();
 }
 
+void UValorCombatComponent::HandleEquipSlotInput(EValorWeaponSlot Slot)
+{
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled() || !OwnerCharacter->IsAlive() || !GetOwner())
+	{
+		return;
+	}
+
+	// 빈 슬롯, 이미 든 슬롯은 무시한다(발로란트: 같은 키를 다시 눌러도 다시 꺼내지 않는다 = 장착 시간이 다시 걸리지 않는다).
+	if (!CanEquipSlot(Slot) || GetEffectiveEquipState().ActiveSlot == Slot)
+	{
+		return;
+	}
+
+	const float RequestTime = static_cast<float>(GetSynchronizedTime());
+
+	// 리슨 서버 호스트: 로컬이 곧 서버이므로 예측 없이 바로 처리한다.
+	if (GetOwner()->HasAuthority())
+	{
+		ProcessEquipRequestAuthority(Slot, RequestTime);
+		return;
+	}
+
+	// 원격 소유 클라: 서버 왕복을 기다리지 않고 바로 바꿔 든다(총 보이기/숨기기, 이동 속도, 장착 타이머가 즉시 반영).
+	// 서버는 같은 요청 시각으로 장착 시간을 계산하므로, 클라가 "다 꺼냈다"고 보는 순간과 서버 판정이 일치한다.
+	++LocalEquipRequestId;
+	LocalEquipState.ActiveSlot = Slot;
+	LocalEquipState.EquipStartTime = RequestTime;
+	LocalEquipState.AckedRequestId = LocalEquipRequestId;
+	RefreshActiveEquipment();
+
+	ServerRequestEquipSlot(Slot, RequestTime, LocalEquipRequestId);
+}
+
+void UValorCombatComponent::HandleCycleWeaponInput(int32 Direction)
+{
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled())
+	{
+		return;
+	}
+
+	const EValorWeaponSlot CurrentSlot = GetEffectiveEquipState().ActiveSlot;
+	const EValorWeaponSlot NextSlot = ValorInventory::CycleSlot(CurrentSlot, Direction, CanEquipSlot(EValorWeaponSlot::Primary), CanEquipSlot(EValorWeaponSlot::Secondary));
+	if (NextSlot != CurrentSlot)
+	{
+		HandleEquipSlotInput(NextSlot);
+	}
+}
+
+void UValorCombatComponent::HandleDropWeaponInput()
+{
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled() || !OwnerCharacter->IsAlive() || !GetOwner())
+	{
+		return;
+	}
+
+	// 칼은 버릴 수 없다. 총을 들고 있을 때만 서버에 요청한다(서버가 자기 상태로 다시 확인한다).
+	if (GetEffectiveEquipState().ActiveSlot == EValorWeaponSlot::Melee || !EquippedWeapon)
+	{
+		return;
+	}
+
+	ServerDropActiveWeapon();
+}
+
 void UValorCombatComponent::TryFireLocalShot()
 {
 	UWorld* World = GetWorld();
@@ -244,8 +352,22 @@ void UValorCombatComponent::TryFireLocalShot()
 		return;
 	}
 
-	// 다음 발까지 최소 간격은 직전 발이 정한다(점사 간격/점사 사이 대기/오딘 가속). 서버도 같은 값으로 검증한다.
 	const double Now = GetSynchronizedTime();
+
+	// 총을 꺼내는 중: 방아쇠를 누르고 있으면 장착이 끝나는 순간 쏜다(떼면 HandleFireInputReleased가 예약을 지운다).
+	// 짧게 누른 탭은 버퍼하지 않는다 — 장착 중 입력이 장착 직후 저절로 나가면 의도치 않은 발사가 된다.
+	const double EquipReadyTime = GetEquipReadyTime();
+	if (Now + KINDA_SMALL_NUMBER < EquipReadyTime)
+	{
+		if (bTriggerHeld)
+		{
+			World->GetTimerManager().SetTimer(LocalFireTimerHandle, this, &UValorCombatComponent::TryFireLocalShot, static_cast<float>(EquipReadyTime - Now), false);
+		}
+
+		return;
+	}
+
+	// 다음 발까지 최소 간격은 직전 발이 정한다(점사 간격/점사 사이 대기/오딘 가속). 서버도 같은 값으로 검증한다.
 	double EarliestShotTime = LastLocalShotTime + EquippedWeapon->GetNextShotCooldown();
 
 	// 4.07: 불독·스팅어는 조준(점사 모드)으로 총을 올리는 동안 발사 입력을 미룬다. 입력은 버리지 않고 다 올린 순간 쏜다.
@@ -593,6 +715,14 @@ bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
 		return false;
 	}
 
+	// (2-1) 장착 시간: 발사 시각이 장착 완료 전이면 거부한다. 장착 시작 시각은 클라가 주장한 교체 시각을 되감기 한도로 자른 값이라
+	//       정상 클라는 자기 예측과 같은 완료 시각을 쓰고, 탄창 끝처럼 예측이 서버보다 살짝 앞선 경우만 여기에 걸린다.
+	if (static_cast<double>(InOutRequest.ClientShotTime) + EquipReadyToleranceSeconds < GetEquipReadyTime())
+	{
+		RejectShot(TEXT("장착 완료 전 발사"), false);
+		return false;
+	}
+
 	// (3) 실제 수신 속도 제한(토큰 버킷): 시각을 위조해 간격을 벌려도 "초당 도착한 발 수"는 속일 수 없다.
 	//     점사 안 속도(스팅어 18발/초)·가속 최고 속도(오딘 15.6)까지 허용해야 정상 점사가 거부되지 않는다.
 	const double RefillPerSecond = static_cast<double>(EquippedWeapon->GetMaxFireRate()) * 1.1;
@@ -671,7 +801,7 @@ void UValorCombatComponent::PlayLocalShotPresentation(const FValorShotEffects& S
 
 void UValorCombatComponent::ExecuteServerReloadAbility()
 {
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !EquippedWeapon || bIsReloading || !EquippedWeapon->CanReload())
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !EquippedWeapon || bIsReloading || !EquippedWeapon->CanReload() || !IsEquipReady())
 	{
 		return;
 	}
@@ -692,7 +822,8 @@ void UValorCombatComponent::SetADSStateFromAbility(bool bNewADS)
 	}
 
 	// 조준할 수 없는 총(우클릭이 공격이거나 없는 총)은 조준 요청을 받아도 조준 상태가 되지 않는다(서버 검증).
-	bIsADS = bNewADS && EquippedWeapon != nullptr && EquippedWeapon->GetMaxZoomLevel() > 0 && !bIsReloading;
+	// 장착이 끝나기 전 조준 요청도 받지 않는다(클라는 장착 중 우클릭을 보내지 않으므로 정상 플레이에는 영향이 없다).
+	bIsADS = bNewADS && EquippedWeapon != nullptr && EquippedWeapon->GetMaxZoomLevel() > 0 && !bIsReloading && IsEquipReady();
 	RefreshADSOnLocalClient();
 }
 
@@ -719,12 +850,14 @@ FValorShooterStance UValorCombatComponent::BuildShooterStance() const
 	}
 
 	Stance.HorizontalSpeed = OwnerCharacter->GetVelocity().Size2D();
-	Stance.WalkSpeed = OwnerCharacter->GetWalkSpeed();
-	Stance.RunSpeed = OwnerCharacter->GetRunSpeed();
-	Stance.CrouchSpeed = OwnerCharacter->GetCrouchSpeed();
 
-	if (const UCharacterMovementComponent* MovementComponent = OwnerCharacter->GetCharacterMovement())
+	// 정확도의 "걷기/달리기/멈춤" 판정 기준은 지금 든 무기·조준 상태의 최고 속도다(Riot 측정: 팬텀 기준 걷기 61%, 데드존 25%).
+	// 칼 기준 속도를 쓰면 라이플은 최고 속도로 달려도 "달리기"에 못 미쳐 이동 오차가 덜 붙는다.
+	if (const UValorCharacterMovementComponent* MovementComponent = OwnerCharacter->GetValorMovement())
 	{
+		Stance.RunSpeed = MovementComponent->GetBaseRunSpeed() * GetEquipMoveSpeedMultiplier();
+		Stance.WalkSpeed = Stance.RunSpeed * MovementComponent->GetWalkSpeedRatio();
+		Stance.CrouchSpeed = Stance.RunSpeed * MovementComponent->GetCrouchSpeedRatio();
 		Stance.bIsCrouched = MovementComponent->IsCrouching();
 		Stance.bIsAirborne = MovementComponent->IsFalling();
 	}
@@ -852,13 +985,33 @@ void UValorCombatComponent::ServerInteractWithPickup_Implementation()
 	}
 
 	// 새 총을 먼저 만든 뒤에 교체한다: 스폰이 실패하면 들고 있던 총을 잃지 않는다.
-	// 교체 시 들고 있던 총은 EquipWeapon 안에서 바닥에 떨어진다.
+	// 같은 슬롯에 있던 총은 AddWeaponToInventory 안에서 바닥에 떨어지고, 주운 총을 바로 꺼내 든다(장착 시간 적용).
 	if (AValorWeaponPickup* Pickup = FindPickupInView())
 	{
 		if (AValorWeaponBase* SpawnedWeapon = Pickup->SpawnWeaponForPickup(OwnerCharacter))
 		{
-			EquipWeapon(SpawnedWeapon);
+			AddWeaponToInventory(SpawnedWeapon, true, false);
 		}
+	}
+}
+
+void UValorCombatComponent::ServerRequestEquipSlot_Implementation(EValorWeaponSlot Slot, float ClientRequestTime, uint8 RequestId)
+{
+	// 처리 결과와 상관없이 "이 요청까지 처리했다"를 먼저 기록한다. 거부해도 번호가 올라가야 클라가 예측을 버리고 서버 상태로 돌아온다.
+	EquipState.AckedRequestId = RequestId;
+	ProcessEquipRequestAuthority(Slot, ClientRequestTime);
+}
+
+void UValorCombatComponent::ServerDropActiveWeapon_Implementation()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !OwnerCharacter || !OwnerCharacter->IsAlive())
+	{
+		return;
+	}
+
+	if (EquipState.ActiveSlot != EValorWeaponSlot::Melee && GetWeaponInSlot(EquipState.ActiveSlot))
+	{
+		DropWeaponInSlot(EquipState.ActiveSlot, true);
 	}
 }
 
@@ -896,25 +1049,394 @@ void UValorCombatComponent::MulticastPlayReloadCue_Implementation()
 	// 이후 애니메이션 몽타주와 사운드를 붙일 수 있도록 리로드 Cue만 열어둔다.
 }
 
-void UValorCombatComponent::OnRep_EquippedWeapon(AValorWeaponBase* PreviousWeapon)
+void UValorCombatComponent::OnRep_PrimaryWeapon(AValorWeaponBase* PreviousWeapon)
 {
+	CacheOwnerCharacter();
+
 	// 교체된 이전 총은 서버에서 파괴되므로, 파괴 복제가 이 OnRep보다 먼저 도착했을 수 있다(IsValid로 확인).
-	if (IsValid(PreviousWeapon) && PreviousWeapon != EquippedWeapon)
+	if (IsValid(PreviousWeapon) && PreviousWeapon != PrimaryWeapon && PreviousWeapon != SecondaryWeapon)
 	{
 		PreviousWeapon->OnUnequipped();
 	}
 
-	// 서버는 교체할 때 조준을 해제한다. 소유 클라도 조준 의도·줌 단계를 지워 서버와 같은 상태(힙)로 예측한다.
-	if (PreviousWeapon != EquippedWeapon && OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+	if (IsValid(PrimaryWeapon) && OwnerCharacter)
 	{
-		bLocalADSIntent = false;
-		LocalZoomLevel = 0;
-		bLocalAltFireHeld = false;
-		GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
+		PrimaryWeapon->OnEquippedBy(OwnerCharacter);
 	}
 
-	ApplyEquippedWeaponAttachment();
+	RefreshActiveEquipment();
+}
+
+void UValorCombatComponent::OnRep_SecondaryWeapon(AValorWeaponBase* PreviousWeapon)
+{
+	CacheOwnerCharacter();
+
+	if (IsValid(PreviousWeapon) && PreviousWeapon != PrimaryWeapon && PreviousWeapon != SecondaryWeapon)
+	{
+		PreviousWeapon->OnUnequipped();
+	}
+
+	if (IsValid(SecondaryWeapon) && OwnerCharacter)
+	{
+		SecondaryWeapon->OnEquippedBy(OwnerCharacter);
+	}
+
+	RefreshActiveEquipment();
+}
+
+void UValorCombatComponent::OnRep_MeleeWeapon()
+{
+	CacheOwnerCharacter();
+
+	if (IsValid(MeleeWeapon) && OwnerCharacter)
+	{
+		MeleeWeapon->OnEquippedBy(OwnerCharacter);
+	}
+
+	RefreshActiveEquipment();
+}
+
+void UValorCombatComponent::OnRep_EquipState()
+{
+	CacheOwnerCharacter();
+
+	// 교체를 예측하는 소유 클라: 서버가 내 마지막 요청까지 처리한 상태만 받아들인다. 그 전의 복제값은 아직 처리 안 된
+	// 요청 이전의 낡은 상태라 받아들이면 방금 바꾼 무기가 잠깐 되돌아간다(서버가 처리하면 곧 새 상태가 온다).
+	// 예측 중이 아니면(다른 플레이어, 아직 빙의 전) 사본을 그대로 맞춰 둔다 — 나중에 예측을 시작할 때 출발점이 서버 값이 되게.
+	if (!IsPredictingOwner() || ValorInventory::IsRequestAcknowledged(EquipState.AckedRequestId, LocalEquipRequestId))
+	{
+		LocalEquipState = EquipState;
+		LocalEquipState.AckedRequestId = LocalEquipRequestId;
+	}
+
+	RefreshActiveEquipment();
+}
+
+AValorWeaponBase* UValorCombatComponent::GetWeaponInSlot(EValorWeaponSlot Slot) const
+{
+	switch (Slot)
+	{
+	case EValorWeaponSlot::Primary:
+		return IsValid(PrimaryWeapon) ? PrimaryWeapon.Get() : nullptr;
+	case EValorWeaponSlot::Secondary:
+		return IsValid(SecondaryWeapon) ? SecondaryWeapon.Get() : nullptr;
+	case EValorWeaponSlot::Melee:
+	default:
+		return nullptr;
+	}
+}
+
+bool UValorCombatComponent::CanEquipSlot(EValorWeaponSlot Slot) const
+{
+	// 칼은 항상 꺼낼 수 있다(칼 액터가 아직 복제되지 않았어도 슬롯은 존재한다).
+	return Slot == EValorWeaponSlot::Melee || GetWeaponInSlot(Slot) != nullptr;
+}
+
+void UValorCombatComponent::SetSlotWeapon(EValorWeaponSlot Slot, AValorWeaponBase* Weapon)
+{
+	if (Slot == EValorWeaponSlot::Primary)
+	{
+		PrimaryWeapon = Weapon;
+	}
+	else if (Slot == EValorWeaponSlot::Secondary)
+	{
+		SecondaryWeapon = Weapon;
+	}
+}
+
+void UValorCombatComponent::CacheOwnerCharacter()
+{
+	if (!OwnerCharacter)
+	{
+		OwnerCharacter = Cast<AValorCharacter>(GetOwner());
+	}
+}
+
+bool UValorCombatComponent::IsPredictingOwner() const
+{
+	return OwnerCharacter && OwnerCharacter->IsLocallyControlled() && GetOwner() && !GetOwner()->HasAuthority();
+}
+
+const FValorEquipState& UValorCombatComponent::GetEffectiveEquipState() const
+{
+	return IsPredictingOwner() ? LocalEquipState : EquipState;
+}
+
+float UValorCombatComponent::GetEquipDurationForSlot(EValorWeaponSlot Slot) const
+{
+	if (Slot == EValorWeaponSlot::Melee)
+	{
+		if (IsValid(MeleeWeapon))
+		{
+			return MeleeWeapon->GetEquipTime();
+		}
+
+		const AValorMeleeWeapon* MeleeDefaults = MeleeWeaponClass ? MeleeWeaponClass->GetDefaultObject<AValorMeleeWeapon>() : nullptr;
+		return MeleeDefaults ? MeleeDefaults->GetEquipTime() : 0.0f;
+	}
+
+	const AValorWeaponBase* SlotWeapon = GetWeaponInSlot(Slot);
+	return SlotWeapon ? SlotWeapon->GetEquipTime() : 0.0f;
+}
+
+double UValorCombatComponent::GetEquipReadyTime() const
+{
+	const FValorEquipState& State = GetEffectiveEquipState();
+	return static_cast<double>(State.EquipStartTime) + static_cast<double>(GetEquipDurationForSlot(State.ActiveSlot));
+}
+
+bool UValorCombatComponent::IsEquipReady() const
+{
+	return GetSynchronizedTime() + KINDA_SMALL_NUMBER >= GetEquipReadyTime();
+}
+
+float UValorCombatComponent::GetEquipProgress() const
+{
+	const FValorEquipState& State = GetEffectiveEquipState();
+	const float Duration = GetEquipDurationForSlot(State.ActiveSlot);
+	if (Duration <= KINDA_SMALL_NUMBER)
+	{
+		return 1.0f;
+	}
+
+	return FMath::Clamp(static_cast<float>((GetSynchronizedTime() - State.EquipStartTime) / Duration), 0.0f, 1.0f);
+}
+
+FText UValorCombatComponent::GetSlotDisplayName(EValorWeaponSlot Slot) const
+{
+	if (Slot == EValorWeaponSlot::Melee)
+	{
+		if (IsValid(MeleeWeapon))
+		{
+			return MeleeWeapon->GetDisplayName();
+		}
+
+		const AValorMeleeWeapon* MeleeDefaults = MeleeWeaponClass ? MeleeWeaponClass->GetDefaultObject<AValorMeleeWeapon>() : nullptr;
+		return MeleeDefaults ? MeleeDefaults->GetDisplayName() : FText::GetEmpty();
+	}
+
+	const AValorWeaponBase* SlotWeapon = GetWeaponInSlot(Slot);
+	return SlotWeapon ? SlotWeapon->GetWeaponConfig().DisplayName : FText::GetEmpty();
+}
+
+float UValorCombatComponent::GetEquipMoveSpeedMultiplier() const
+{
+	if (EquippedWeapon)
+	{
+		return EquippedWeapon->GetMoveSpeedMultiplier(IsADSForGameplay());
+	}
+
+	if (IsValid(MeleeWeapon))
+	{
+		return MeleeWeapon->GetMoveSpeedMultiplier();
+	}
+
+	// 칼 액터가 아직 복제되지 않았거나 빈 슬롯을 예측 중인 짧은 순간: 칼 기본 속도(배율 1).
+	return 1.0f;
+}
+
+void UValorCombatComponent::RefreshActiveEquipment()
+{
+	const EValorWeaponSlot ActiveSlot = GetEffectiveEquipState().ActiveSlot;
+	AValorWeaponBase* NewActiveWeapon = GetWeaponInSlot(ActiveSlot);
+
+	// 손에 든 것만 보이고 나머지는 숨긴다. 발로란트 3인칭 모델도 집어넣은 무기를 몸에 그리지 않는다.
+	// 숨김은 각 머신이 같은 장착 상태로 직접 계산한다(복제되는 액터 숨김 플래그를 쓰면 소유 클라의 교체 예측을 서버 값이 덮는다).
+	for (AValorWeaponBase* SlotWeapon : {PrimaryWeapon.Get(), SecondaryWeapon.Get()})
+	{
+		if (IsValid(SlotWeapon))
+		{
+			SlotWeapon->SetHolstered(SlotWeapon != NewActiveWeapon);
+		}
+	}
+
+	if (IsValid(MeleeWeapon))
+	{
+		MeleeWeapon->SetHolstered(ActiveSlot != EValorWeaponSlot::Melee);
+	}
+
+	AValorWeaponBase* PreviousWeapon = EquippedWeapon;
+	const bool bActiveChanged = PreviousWeapon != NewActiveWeapon || ActiveSlot != LastAppliedActiveSlot;
+	EquippedWeapon = NewActiveWeapon;
+	LastAppliedActiveSlot = ActiveSlot;
+
+	if (bActiveChanged)
+	{
+		HandleActiveEquipmentChanged(PreviousWeapon);
+	}
+
 	RefreshADSOnLocalClient();
+}
+
+void UValorCombatComponent::HandleActiveEquipmentChanged(AValorWeaponBase* PreviousWeapon)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// 모든 머신: 집어넣은 총의 점사를 끊는다(서버와 예측 클라가 같은 순서 위치에서 끊으므로 다음 발 간격 계산이 일치한다).
+	if (IsValid(PreviousWeapon) && PreviousWeapon != EquippedWeapon)
+	{
+		PreviousWeapon->CancelBurst();
+	}
+
+	// 서버: 재장전은 교체하면 취소된다(진행도도 사라진다). 조준 어빌리티를 끝내 bIsADS를 내린다.
+	// 로컬 발사 예약보다 먼저 해야 리슨 호스트가 재장전 중 교체했을 때도 새 총 발사 예약이 막히지 않는다.
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		World->GetTimerManager().ClearTimer(ReloadTimerHandle);
+		bIsReloading = false;
+
+		if (AbilitySystemComponent && ADSAbilityHandle.IsValid())
+		{
+			AbilitySystemComponent->CancelAbilityHandle(ADSAbilityHandle);
+		}
+
+		bIsADS = false;
+		LastAcceptedShotTime = -1000.0;
+	}
+
+	// 로컬 사수(예측 클라/리슨 호스트): 옛 총의 발사 예약·조준·재조준 예약을 지운다. 서버도 교체 시 조준을 끝내므로 같은 상태(힙)다.
+	if (OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+	{
+		World->GetTimerManager().ClearTimer(LocalFireTimerHandle);
+		World->GetTimerManager().ClearTimer(ReScopeTimerHandle);
+		bFireShotBuffered = false;
+		bLocalAltFireHeld = false;
+		bLocalFiringAltAttack = false;
+		bLocalADSIntent = false;
+		LocalZoomLevel = 0;
+
+		// 방아쇠를 누른 채 바꿨다면 새 총은 장착이 끝나는 순간부터 쏜다(TryFireLocalShot이 장착 완료 시각으로 예약한다).
+		if (bLocalFireHeld && EquippedWeapon && OwnerCharacter->IsAlive())
+		{
+			TryFireLocalShot();
+		}
+	}
+}
+
+void UValorCombatComponent::ProcessEquipRequestAuthority(EValorWeaponSlot Slot, float ClientRequestTime)
+{
+	UWorld* World = GetWorld();
+	if (!World || !GetOwner() || !GetOwner()->HasAuthority() || !OwnerCharacter || !OwnerCharacter->IsAlive())
+	{
+		return;
+	}
+
+	// 빈 슬롯 요청(클라 예측이 서버보다 앞선 경우 등)과 이미 든 슬롯은 바꾸지 않는다. 요청 번호는 이미 기록됐으므로
+	// 클라는 다음 복제에서 서버 상태로 돌아온다.
+	if (!CanEquipSlot(Slot) || EquipState.ActiveSlot == Slot)
+	{
+		return;
+	}
+
+	// 장착 시작 시각 = 클라가 누른 시각(발사 시각과 같은 동기화 시간축). 너무 먼 과거 주장은 되감기 한도로 잘라
+	// "교체를 오래전에 눌렀다"고 속여 장착 시간을 줄이는 조작을 막는다.
+	const float StartTime = ValorInventory::ClampEquipRequestTime(ClientRequestTime, World->GetTimeSeconds(), MaxShotRewindSeconds);
+	SetActiveSlotAuthority(Slot, StartTime);
+}
+
+void UValorCombatComponent::SetActiveSlotAuthority(EValorWeaponSlot Slot, float StartTime)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	EquipState.ActiveSlot = Slot;
+	EquipState.EquipStartTime = StartTime;
+	RefreshActiveEquipment();
+}
+
+void UValorCombatComponent::AddWeaponToInventory(AValorWeaponBase* NewWeapon, bool bMakeActive, bool bInstantEquip)
+{
+	UWorld* World = GetWorld();
+	if (!World || !GetOwner() || !GetOwner()->HasAuthority() || !NewWeapon || !OwnerCharacter)
+	{
+		return;
+	}
+
+	EnsureMeleeWeapon();
+
+	// 발로란트 규칙: 같은 종류(주무기/권총)의 총을 주우면, 그 칸의 총은 탄약을 가진 채 바닥에 떨어지고 새 총으로 바뀐다.
+	const EValorWeaponSlot Slot = NewWeapon->GetInventorySlot();
+	AValorWeaponBase* ExistingWeapon = GetWeaponInSlot(Slot);
+	if (ExistingWeapon && ExistingWeapon != NewWeapon)
+	{
+		DropWeaponInSlot(Slot, false);
+	}
+
+	SetSlotWeapon(Slot, NewWeapon);
+	NewWeapon->OnEquippedBy(OwnerCharacter);
+
+	if (bMakeActive)
+	{
+		SetActiveSlotAuthority(Slot, bInstantEquip ? InstantEquipStartTime : static_cast<float>(World->GetTimeSeconds()));
+		return;
+	}
+
+	RefreshActiveEquipment();
+}
+
+void UValorCombatComponent::EnsureMeleeWeapon()
+{
+	UWorld* World = GetWorld();
+	if (!World || !GetOwner() || !GetOwner()->HasAuthority() || IsValid(MeleeWeapon) || !MeleeWeaponClass)
+	{
+		return;
+	}
+
+	if (!OwnerCharacter)
+	{
+		OwnerCharacter = Cast<AValorCharacter>(GetOwner());
+	}
+
+	if (!OwnerCharacter)
+	{
+		return;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = OwnerCharacter;
+	SpawnParameters.Instigator = OwnerCharacter;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	MeleeWeapon = World->SpawnActor<AValorMeleeWeapon>(MeleeWeaponClass, OwnerCharacter->GetActorTransform(), SpawnParameters);
+	if (MeleeWeapon)
+	{
+		MeleeWeapon->OnEquippedBy(OwnerCharacter);
+	}
+
+	RefreshActiveEquipment();
+}
+
+void UValorCombatComponent::DestroyInventory()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	for (AValorWeaponBase* SlotWeapon : {PrimaryWeapon.Get(), SecondaryWeapon.Get()})
+	{
+		if (IsValid(SlotWeapon))
+		{
+			SlotWeapon->OnUnequipped();
+			SlotWeapon->Destroy();
+		}
+	}
+
+	if (IsValid(MeleeWeapon))
+	{
+		MeleeWeapon->Destroy();
+	}
+
+	PrimaryWeapon = nullptr;
+	SecondaryWeapon = nullptr;
+	MeleeWeapon = nullptr;
+	EquippedWeapon = nullptr;
 }
 
 void UValorCombatComponent::OnRep_IsADS()
@@ -927,48 +1449,6 @@ void UValorCombatComponent::OnRep_IsReloading()
 	// 재장전 시작: 토글 조준은 풀린다(다시 우클릭해야 조준). 누르고 있는 방식이면 재장전 동안만 꺼졌다가 버튼을 유지하면 다시 조준된다.
 	ExitToggledZoomForReload();
 	RefreshADSOnLocalClient();
-}
-
-void UValorCombatComponent::EquipWeapon(AValorWeaponBase* NewWeapon)
-{
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !NewWeapon)
-	{
-		return;
-	}
-
-	// 발로란트 규칙: 총을 든 채 다른 총을 주우면, 들고 있던 총은 탄약을 가진 채 바닥에 떨어지고 새 총으로 바뀐다.
-	if (EquippedWeapon && EquippedWeapon != NewWeapon)
-	{
-		DropEquippedWeapon();
-	}
-
-	// 이전 총의 재장전 타이머가 새 총에 적용되지 않게 끊는다(재장전 중 교체 → 새 총이 즉시 채워지는 문제 방지).
-	if (UWorld* World = GetWorld())
-	{
-		World->GetTimerManager().ClearTimer(ReloadTimerHandle);
-	}
-
-	// 교체하면 조준이 풀린다. 우클릭을 누르고 있어도 다시 눌러야 조준한다(어빌리티 종료 → SetADSStateFromAbility(false)).
-	if (AbilitySystemComponent && ADSAbilityHandle.IsValid())
-	{
-		AbilitySystemComponent->CancelAbilityHandle(ADSAbilityHandle);
-	}
-
-	EquippedWeapon = NewWeapon;
-	bIsReloading = false;
-	bIsADS = false;
-	LastAcceptedShotTime = -1000.0;
-	ApplyEquippedWeaponAttachment();
-
-	// 리슨 서버 호스트는 EquippedWeapon OnRep이 오지 않으므로 로컬 조준 상태를 여기서 정리한다.
-	if (OwnerCharacter && OwnerCharacter->IsLocallyControlled())
-	{
-		bLocalADSIntent = false;
-		LocalZoomLevel = 0;
-		bLocalAltFireHeld = false;
-		GetWorld()->GetTimerManager().ClearTimer(ReScopeTimerHandle);
-		RefreshADSOnLocalClient();
-	}
 }
 
 void UValorCombatComponent::HandleUnscopeAfterShot()
@@ -1016,16 +1496,16 @@ void UValorCombatComponent::ReScopeAfterShot()
 	}
 }
 
-void UValorCombatComponent::DropEquippedWeapon()
+void UValorCombatComponent::DropWeaponInSlot(EValorWeaponSlot Slot, bool bSelectFallback)
 {
 	UWorld* World = GetWorld();
-	if (!World || !GetOwner() || !GetOwner()->HasAuthority() || !EquippedWeapon)
+	AValorWeaponBase* WeaponToDrop = GetWeaponInSlot(Slot);
+	if (!World || !GetOwner() || !GetOwner()->HasAuthority() || !WeaponToDrop)
 	{
 		return;
 	}
 
-	AValorWeaponBase* WeaponToDrop = EquippedWeapon;
-	EquippedWeapon = nullptr;
+	SetSlotWeapon(Slot, nullptr);
 
 	// 바닥의 총은 별도 픽업 액터로 만들고(총 종류 + 탄약을 옮김), 손에 들고 있던 무기 액터는 파괴한다.
 	// 픽업은 서버에서 스폰되어 복제되므로 모든 클라에 같은 위치로 보인다.
@@ -1043,6 +1523,16 @@ void UValorCombatComponent::DropEquippedWeapon()
 
 	WeaponToDrop->OnUnequipped();
 	WeaponToDrop->Destroy();
+
+	// 든 총을 버렸다면 남은 가장 좋은 무기를 꺼낸다(장착 시간 적용). 서버가 먼저 바꾸는 상태라 클라는 복제로 따라온다.
+	if (bSelectFallback && EquipState.ActiveSlot == Slot)
+	{
+		const EValorWeaponSlot FallbackSlot = ValorInventory::SelectFallbackSlot(CanEquipSlot(EValorWeaponSlot::Primary), CanEquipSlot(EValorWeaponSlot::Secondary));
+		SetActiveSlotAuthority(FallbackSlot, static_cast<float>(World->GetTimeSeconds()));
+		return;
+	}
+
+	RefreshActiveEquipment();
 }
 
 void UValorCombatComponent::HandleOwnerDeath()
@@ -1066,18 +1556,21 @@ void UValorCombatComponent::HandleOwnerDeath()
 
 	if (GetOwner() && GetOwner()->HasAuthority())
 	{
-		// 서버: 재장전을 취소하고(타이머가 죽은 뒤 탄을 채우지 않게), 들고 있던 총을 그 자리에 떨어뜨린다(발로란트: 시체 옆에 총이 남는다).
+		// 서버: 재장전을 취소하고(타이머가 죽은 뒤 탄을 채우지 않게), 가장 좋은 총 하나를 시체 옆에 떨어뜨린다.
+		// 발로란트: 주무기가 있으면 주무기, 없으면 권총이 떨어지고, 나머지(권총·칼)는 시체와 함께 사라진다.
 		// 조준 어빌리티는 캐릭터가 CancelAllAbilities로 이미 끝냈다 → SetADSStateFromAbility(false)로 bIsADS가 내려간다.
 		World->GetTimerManager().ClearTimer(ReloadTimerHandle);
 		bIsReloading = false;
 		bIsADS = false;
-		DropEquippedWeapon();
+
+		DropWeaponInSlot(PrimaryWeapon ? EValorWeaponSlot::Primary : EValorWeaponSlot::Secondary, false);
+		DestroyInventory();
 	}
 
 	RefreshADSOnLocalClient();
 }
 
-void UValorCombatComponent::GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass)
+void UValorCombatComponent::GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass, bool bMakeActive, bool bInstantEquip)
 {
 	// 리슨/스탠드얼론의 첫 스폰은 월드 BeginPlay 전에 GameMode가 부를 수 있어, BeginPlay에서 채우는 OwnerCharacter를 여기서도 확보한다.
 	if (!OwnerCharacter)
@@ -1099,7 +1592,7 @@ void UValorCombatComponent::GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass
 
 	if (AValorWeaponBase* NewWeapon = World->SpawnActor<AValorWeaponBase>(WeaponClass, OwnerCharacter->GetActorTransform(), SpawnParameters))
 	{
-		EquipWeapon(NewWeapon);
+		AddWeaponToInventory(NewWeapon, bMakeActive, bInstantEquip);
 	}
 }
 
@@ -1143,14 +1636,6 @@ FTransform UValorCombatComponent::ComputeDropTransform() const
 	}
 
 	return FTransform(DropRotation, DropLocation);
-}
-
-void UValorCombatComponent::ApplyEquippedWeaponAttachment() const
-{
-	if (EquippedWeapon && OwnerCharacter)
-	{
-		EquippedWeapon->OnEquippedBy(OwnerCharacter);
-	}
 }
 
 void UValorCombatComponent::RefreshADSOnLocalClient() const

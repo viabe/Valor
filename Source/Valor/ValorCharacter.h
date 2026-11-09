@@ -5,6 +5,7 @@
 #include "Components/ValorCharacterStateComponent.h"
 #include "GameFramework/Character.h"
 #include "Interfaces/ValorWeaponOwnerInterface.h"
+#include "Weapons/ValorInventoryTypes.h"
 #include "ValorCharacter.generated.h"
 
 class UAbilitySystemComponent;
@@ -15,6 +16,7 @@ class USpringArmComponent;
 class UValorAbilitySystemComponent;
 class UValorCombatAttributeSet;
 class UValorCameraComponent;
+class UValorCharacterMovementComponent;
 class UValorCharacterStateComponent;
 class UValorCombatComponent;
 class UValorInputRouterComponent;
@@ -104,24 +106,15 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Weapon", meta = (AllowPrivateAccess = "true"))
 	FName WeaponAttachSocketName = TEXT("hand_r_socket");
 
-	// 기본 이동 속도는 달리기 기준이다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Movement", meta = (AllowPrivateAccess = "true"))
-	float RunSpeed = 500.0f;
-
-	// 걷기 입력을 누르는 동안 적용할 속도다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Movement", meta = (AllowPrivateAccess = "true"))
-	float WalkSpeed = 250.0f;
-
-	// 앉아 있는 동안 적용할 속도다.
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Movement", meta = (AllowPrivateAccess = "true"))
-	float CrouchSpeed = 180.0f;
+	// 이동 속도(달리기·걷기·앉기 비율, 무기·조준 배율)는 UValorCharacterMovementComponent가 이동 예측과 함께 계산한다.
 
 	// 캐릭터별 애니메이션 오버라이드 계층이 공통 AnimInstance 위에서 분기할 수 있도록 남겨둔 프로필 이름이다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Animation", meta = (AllowPrivateAccess = "true"))
 	FName AnimationProfileName = TEXT("Default");
 
 public:
-	AValorCharacter();
+	// 이동 컴포넌트를 발로란트 속도 규칙·예측 데이터를 가진 UValorCharacterMovementComponent로 바꿔 끼운다.
+	explicit AValorCharacter(const FObjectInitializer& ObjectInitializer);
 
 	virtual void BeginPlay() override;
 	virtual void PossessedBy(AController* NewController) override;
@@ -160,15 +153,18 @@ public:
 	void HandleADSInputReleased();
 	void HandleInteractInputPressed();
 
+	// 무기 슬롯 입력(1/2/3, 휠, G). 실제 처리는 전투 컴포넌트가 한다.
+	void HandleEquipSlotInput(EValorWeaponSlot Slot);
+	void HandleCycleWeaponInput(int32 Direction);
+	void HandleDropWeaponInput();
+
 	// 서버가 마지막으로 승인한 이동 입력값을 조회한다.
 	FVector2D GetLastValidatedMoveInput() const { return LastValidatedMoveInput; }
-	bool IsWalkInputActive() const { return bWantsToWalk; }
+	// 걷기 의도. 서버에서는 마지막으로 처리한 이동의 압축 플래그 값이다(이동 예측과 같은 경로).
+	bool IsWalkInputActive() const;
 	FName GetAnimationProfileName() const { return AnimationProfileName; }
 
-	// 사격 정확도(이동 오차) 계산이 "걷기/달리기/앉기 최고 속도 대비 현재 속도"로 상태를 판정할 수 있게 노출한다.
-	float GetWalkSpeed() const { return WalkSpeed; }
-	float GetRunSpeed() const { return RunSpeed; }
-	float GetCrouchSpeed() const { return CrouchSpeed; }
+	UValorCharacterMovementComponent* GetValorMovement() const;
 
 	// 마지막 착지 시각(로컬 월드 시간). 착지 직후 탄퍼짐 페널티(발로란트 Jump land inaccuracy)에 쓴다.
 	double GetLastLandedWorldTime() const { return LastLandedWorldTime; }
@@ -204,10 +200,6 @@ protected:
 	// 점프 입력은 서버가 유효성을 판단하고 상태 전이/후속 이펙트를 확정한다.
 	UFUNCTION(Server, Reliable)
 	void ServerSetJumpPressed(bool bPressed);
-
-	// 걷기 의도는 서버가 최종 이동 속도를 확정할 수 있도록 별도 RPC로 전달한다.
-	UFUNCTION(Server, Reliable)
-	void ServerSetWalkPressed(bool bPressed);
 
 	// 앉기 의도는 서버가 최종 자세와 속도를 확정할 수 있도록 별도 RPC로 전달한다.
 	UFUNCTION(Server, Reliable)
@@ -259,13 +251,9 @@ private:
 	void HandleMovementStateChanged(EValorMovementState PreviousMovementState, EValorMovementState NewMovementState);
 	void SetWalkIntent(bool bNewWantsToWalk);
 	void SetCrouchIntent(bool bNewWantsToCrouch);
-	void RefreshMovementSpeed();
 
 	// 서버가 마지막으로 승인한 입력값이다. 상태 계산과 이후 무기/능력 판정의 기준 입력으로 사용한다.
 	FVector2D LastValidatedMoveInput = FVector2D::ZeroVector;
-
-	// 걷기 홀드 입력의 현재 의도값이다.
-	bool bWantsToWalk = false;
 
 	// 앉기 홀드 입력의 현재 의도값이다.
 	bool bWantsToCrouch = false;

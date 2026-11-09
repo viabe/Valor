@@ -5,10 +5,12 @@
 #include "GameplayAbilitySpecHandle.h"
 #include "Templates/Function.h"
 #include "Weapons/Data/ValorWeaponDataAsset.h"
+#include "Weapons/ValorInventoryTypes.h"
 #include "Weapons/ValorWeaponTypes.h"
 #include "ValorCombatComponent.generated.h"
 
 class AValorCharacter;
+class AValorMeleeWeapon;
 class AValorWeaponBase;
 class AValorWeaponPickup;
 class UGameplayAbility;
@@ -38,8 +40,18 @@ struct FValorHitScanResult
 /**
  * 전투 컴포넌트: 사격/재장전/ADS/줍기·교체의 입력 → 서버 요청 → 서버 판정 → 연출 흐름을 담당한다.
  *
+ * 무기 슬롯(발로란트 1 주무기 / 2 보조무기 / 3 칼):
+ *  - 슬롯별 총(PrimaryWeapon/SecondaryWeapon)과 칼(MeleeWeapon)은 서버가 스폰·소유하고 복제한다. 손에 든 슬롯과 장착 시작 시각은
+ *    FValorEquipState 하나로 복제한다. EquippedWeapon은 복제하지 않는 "지금 든 총" 캐시다(칼이면 nullptr).
+ *  - 교체(1/2/3·휠): 소유 클라가 즉시 자기 사본을 바꿔 예측하고(총 보이기/숨기기, 이동 속도, 장착 타이머) 요청 번호와 요청 시각을
+ *    서버에 보낸다. 서버는 요청 시각을 되감기 한도 안으로 잘라 장착 시작 시각으로 쓰고, 처리한 요청 번호를 복제해 돌려준다.
+ *    클라는 자기 마지막 요청까지 처리된 상태만 받아들인다(FValorEquipState 설명 참고).
+ *  - 장착 시간: 장착 시작 + 무기의 EquipTime이 지나기 전에는 발사·조준·재장전이 안 된다. 서버는 발사 요청의 발사 시각을
+ *    장착 완료 시각과 비교해 거부한다(발사 시각 검증과 같은 시간축이라 클라 예측과 판정이 일치한다).
+ *  - 이동 속도: 든 무기·조준 상태의 배율을 UValorCharacterMovementComponent가 이동 예측에 실어 서버로 보낸다(그쪽 설명 참고).
+ *
  * 줍기·교체 흐름(서버 권위): F 입력 → ServerInteractWithPickup → 서버가 조준선으로 픽업을 고른다 → 새 총 스폰 →
- *  들고 있던 총은 탄약을 가진 채 바닥 픽업으로 떨어뜨림 → 새 총 장착(복제된 EquippedWeapon으로 클라에 반영).
+ *  같은 슬롯에 있던 총은 탄약을 가진 채 바닥 픽업으로 떨어뜨림 → 새 총을 그 슬롯에 넣고 꺼낸다(장착 시간 적용).
  *
  * 사격 흐름(발로란트 넷코드 원칙: 클라 예측 + 서버 권위 + 발사 시각 기준 되감기):
  *  1) 소유 클라가 발사 입력을 받으면 로컬 발사 루프(연사 속도 타이머)가 한 발 요청(시각 + 조준 방향)을 만든다.
@@ -62,6 +74,7 @@ public:
 	UValorCombatComponent();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	void InitializeAbilityBindings(UValorAbilitySystemComponent* InAbilitySystemComponent);
@@ -73,20 +86,60 @@ public:
 	void HandleADSInputReleased();
 	void HandleInteractInputPressed();
 
+	// 1/2/3: 그 슬롯을 꺼낸다(비어 있거나 이미 든 슬롯이면 무시). 소유 클라는 즉시 예측하고 서버에 요청한다.
+	void HandleEquipSlotInput(EValorWeaponSlot Slot);
+
+	// 휠: 다음(+1)/이전(-1) 슬롯으로 순환(빈 슬롯 건너뜀).
+	void HandleCycleWeaponInput(int32 Direction);
+
+	// G: 손에 든 총을 바닥에 버린다(칼은 버릴 수 없다). 픽업 스폰이 필요하므로 예측하지 않고 서버가 처리한다.
+	void HandleDropWeaponInput();
+
 	// GA_WeaponFire(서버 전용 어빌리티)가 활성화되면 호출된다. 대기 중인 발사 요청 1개를 권위적으로 처리한다.
 	void ExecuteServerFireAbility();
 	void ExecuteServerReloadAbility();
 	void SetADSStateFromAbility(bool bNewADS);
 
 	// 소유 캐릭터가 죽었을 때 호출한다(서버: 캐릭터의 사망 처리, 클라: OnRep_IsDead).
-	// 모든 머신: 발사 루프·조준 상태 정리. 서버: 재장전 취소 + 들고 있던 총을 바닥에 떨어뜨림.
+	// 모든 머신: 발사 루프·조준 상태 정리. 서버: 재장전 취소 + 가장 좋은 총 하나(주무기, 없으면 보조무기)를 바닥에 떨어뜨리고
+	// 나머지 총과 칼은 없앤다(발로란트: 시체 옆에는 총 한 자루만 남는다).
 	void HandleOwnerDeath();
 
-	// 서버 전용: 무기 클래스를 스폰해 장착한다(스폰 시 기본 무기). 들고 있던 총은 교체 규칙대로 바닥에 떨어진다.
-	void GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass);
+	// 서버 전용: 무기 클래스를 스폰해 맞는 슬롯에 넣는다(스폰 시 기본 무기). 같은 슬롯의 총은 교체 규칙대로 바닥에 떨어진다.
+	// bMakeActive = 바로 꺼내 든다. bInstantEquip = 장착 시간 없이 바로 쏠 수 있다(스폰 지급용).
+	void GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass, bool bMakeActive = true, bool bInstantEquip = false);
 
+	// 지금 든 총. 칼을 들고 있거나 빈 손이면 nullptr. 소유 클라는 교체 예측이 반영된 값이다.
 	UFUNCTION(BlueprintPure, Category="Valor|Combat")
 	AValorWeaponBase* GetEquippedWeapon() const { return EquippedWeapon; }
+
+	// === 슬롯 조회(HUD/애니메이션) ===
+
+	// 슬롯의 총(칼 슬롯은 항상 nullptr — 칼은 GetMeleeWeapon).
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Inventory")
+	AValorWeaponBase* GetWeaponInSlot(EValorWeaponSlot Slot) const;
+
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Inventory")
+	AValorMeleeWeapon* GetMeleeWeapon() const { return MeleeWeapon; }
+
+	// 지금 든 슬롯(소유 클라는 예측값).
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Inventory")
+	EValorWeaponSlot GetActiveSlot() const { return GetEffectiveEquipState().ActiveSlot; }
+
+	// 장착이 끝나 쏠 수 있는가(서버는 서버 시각, 소유 클라는 예측 상태 + 동기화 시간 기준).
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Inventory")
+	bool IsEquipReady() const;
+
+	// 장착 진행도 0~1(HUD 표시용).
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Inventory")
+	float GetEquipProgress() const;
+
+	// 슬롯에 표시할 이름(총 이름 또는 칼 이름). 빈 슬롯이면 빈 텍스트.
+	FText GetSlotDisplayName(EValorWeaponSlot Slot) const;
+
+	// 지금 장비 상태의 이동 속도 배율(칼 6.75m/s 대비: 든 무기 × 조준 배율). 이동 컴포넌트와 정확도 계산이 읽는다.
+	// 소유 클라는 교체·조준 예측이 반영되고, 서버는 서버 권위 상태다.
+	float GetEquipMoveSpeedMultiplier() const;
 
 	bool IsADSActive() const { return bIsADS; }
 
@@ -136,8 +189,25 @@ public:
 	FRotator GetCameraRecoilOffset() const;
 
 protected:
-	UPROPERTY(ReplicatedUsing=OnRep_EquippedWeapon, VisibleInstanceOnly, Category="Valor|Combat")
-	TObjectPtr<AValorWeaponBase> EquippedWeapon;
+	// === 인벤토리(서버 권위, 모두에게 복제) ===
+	// 다른 플레이어 화면에서도 든 총을 보여 주고 애니메이션 무기군을 고르려면 슬롯 무기와 장착 상태가 필요하다.
+	// 무기 액터 자체는 소유자 관련성으로 캐릭터와 함께 복제되고, 여기서는 참조(NetGUID)만 보낸다.
+
+	UPROPERTY(ReplicatedUsing=OnRep_PrimaryWeapon, VisibleInstanceOnly, Category="Valor|Combat|Inventory")
+	TObjectPtr<AValorWeaponBase> PrimaryWeapon;
+
+	UPROPERTY(ReplicatedUsing=OnRep_SecondaryWeapon, VisibleInstanceOnly, Category="Valor|Combat|Inventory")
+	TObjectPtr<AValorWeaponBase> SecondaryWeapon;
+
+	UPROPERTY(ReplicatedUsing=OnRep_MeleeWeapon, VisibleInstanceOnly, Category="Valor|Combat|Inventory")
+	TObjectPtr<AValorMeleeWeapon> MeleeWeapon;
+
+	UPROPERTY(ReplicatedUsing=OnRep_EquipState, VisibleInstanceOnly, Category="Valor|Combat|Inventory")
+	FValorEquipState EquipState;
+
+	// 모든 캐릭터가 갖는 칼 클래스.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Inventory")
+	TSubclassOf<AValorMeleeWeapon> MeleeWeaponClass;
 
 	UPROPERTY(ReplicatedUsing=OnRep_IsADS, VisibleInstanceOnly, Category="Valor|Combat")
 	bool bIsADS = false;
@@ -226,6 +296,14 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void ServerInteractWithPickup();
 
+	// 슬롯 교체 요청. 신뢰성: 발사 RPC와 같은 순서로 처리돼야 "교체 전에 쏜 발은 옛 총으로, 뒤에 쏜 발은 새 총으로" 판정된다.
+	// ClientRequestTime = 누른 순간의 동기화 시간(장착 시작 시각 주장), RequestId = 예측 조정용 요청 번호.
+	UFUNCTION(Server, Reliable)
+	void ServerRequestEquipSlot(EValorWeaponSlot Slot, float ClientRequestTime, uint8 RequestId);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDropActiveWeapon();
+
 	// 다른 클라용 발사 연출(트레이서/탄흔/발사 몽타주, 산탄총은 펠릿별 탄착). 연출은 한 발 놓쳐도 게임에 영향이 없으므로 비신뢰로 보낸다.
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastSimulateFire(const FValorShotEffects& ShotEffects);
@@ -234,7 +312,16 @@ protected:
 	void MulticastPlayReloadCue();
 
 	UFUNCTION()
-	void OnRep_EquippedWeapon(AValorWeaponBase* PreviousWeapon);
+	void OnRep_PrimaryWeapon(AValorWeaponBase* PreviousWeapon);
+
+	UFUNCTION()
+	void OnRep_SecondaryWeapon(AValorWeaponBase* PreviousWeapon);
+
+	UFUNCTION()
+	void OnRep_MeleeWeapon();
+
+	UFUNCTION()
+	void OnRep_EquipState();
 
 	UFUNCTION()
 	void OnRep_IsADS();
@@ -284,17 +371,54 @@ private:
 	// 누르고 있는 방식이면 재장전 동안만 조준이 꺼졌다가 버튼을 계속 누르고 있으면 다시 조준된다.
 	void ExitToggledZoomForReload();
 
-	// 서버 전용: 새 총을 장착한다. 이미 들고 있던 총은 DropEquippedWeapon으로 바닥에 떨어뜨린다(발로란트식 교체).
-	void EquipWeapon(AValorWeaponBase* NewWeapon);
+	// === 인벤토리 내부 ===
 
-	// 서버 전용: 들고 있는 총을 바닥 픽업으로 바꿔 내려놓는다(총 종류·탄약 유지).
-	// 교체에서 쓰고, 이후 사망 시 드롭·버리기 키도 같은 함수를 쓰면 된다.
-	void DropEquippedWeapon();
+	// 이 머신이 쓰는 장착 상태: 교체를 예측하는 소유 클라는 자기 사본, 서버·다른 클라는 복제된 서버 상태.
+	const FValorEquipState& GetEffectiveEquipState() const;
+
+	// 원격 소유 클라(서버가 아닌데 내가 조종하는 캐릭터)인가 = 교체를 예측하는 머신인가.
+	bool IsPredictingOwner() const;
+
+	// 클라의 첫 복제(OnRep)는 BeginPlay보다 먼저 올 수 있어, 그 경로에서도 소유 캐릭터를 확보한다.
+	void CacheOwnerCharacter();
+
+	// 지금 장착 상태로 EquippedWeapon을 다시 정하고, 슬롯 무기들의 보임/숨김을 맞춘다(모든 머신, 여러 번 불려도 같은 결과).
+	void RefreshActiveEquipment();
+
+	// 든 무기가 바뀐 순간의 정리: 이전 총 점사 취소, 로컬 발사 루프·조준 해제, 서버는 재장전·조준 취소.
+	void HandleActiveEquipmentChanged(AValorWeaponBase* PreviousWeapon);
+
+	bool CanEquipSlot(EValorWeaponSlot Slot) const;
+	void SetSlotWeapon(EValorWeaponSlot Slot, AValorWeaponBase* Weapon);
+
+	// 슬롯의 장착 시간(칼은 칼 액터, 아직 복제 전이면 칼 클래스 기본값).
+	float GetEquipDurationForSlot(EValorWeaponSlot Slot) const;
+
+	// 장착 완료 시각(동기화 시간축) = 장착 시작 + 장착 시간.
+	double GetEquipReadyTime() const;
+
+	// 서버 전용: 교체 요청 처리(원격 클라 RPC와 리슨 호스트 입력이 같이 쓴다).
+	void ProcessEquipRequestAuthority(EValorWeaponSlot Slot, float ClientRequestTime);
+
+	// 서버 전용: 손에 든 슬롯을 바꾸고 장착을 시작한다(StartTime = 장착 시작 시각, 아주 과거 값이면 즉시 장착).
+	void SetActiveSlotAuthority(EValorWeaponSlot Slot, float StartTime);
+
+	// 서버 전용: 총을 맞는 슬롯에 넣는다. 같은 슬롯의 총은 바닥에 떨어뜨린다(발로란트식 교체).
+	void AddWeaponToInventory(AValorWeaponBase* NewWeapon, bool bMakeActive, bool bInstantEquip);
+
+	// 서버 전용: 슬롯의 총을 바닥 픽업으로 바꿔 내려놓는다(총 종류·탄약 유지). 교체·버리기·사망 드롭이 같이 쓴다.
+	// bSelectFallback이면, 든 총을 버린 경우 남은 가장 좋은 무기를 꺼낸다(교체처럼 곧바로 다른 총을 넣을 때는 false).
+	void DropWeaponInSlot(EValorWeaponSlot Slot, bool bSelectFallback);
+
+	// 서버 전용: 칼이 없으면 스폰한다(스폰 직후·첫 지급 시).
+	void EnsureMeleeWeapon();
+
+	// 서버 전용: 남은 총과 칼을 모두 없앤다(사망·캐릭터 제거).
+	void DestroyInventory();
 
 	// 서버 전용: 떨어뜨릴 위치와 방향(캐릭터 앞 바닥, 벽 앞에서 멈춤).
 	FTransform ComputeDropTransform() const;
 
-	void ApplyEquippedWeaponAttachment() const;
 	void RefreshADSOnLocalClient() const;
 	void FinishReload();
 
@@ -311,6 +435,19 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UValorAbilitySystemComponent> AbilitySystemComponent;
+
+	// 지금 든 총(복제하지 않는 캐시). RefreshActiveEquipment만 바꾼다.
+	UPROPERTY(Transient)
+	TObjectPtr<AValorWeaponBase> EquippedWeapon;
+
+	// 소유 클라의 장착 상태 사본(예측). 서버 상태를 받아들일 수 있을 때마다 서버 값으로 덮어쓴다.
+	FValorEquipState LocalEquipState;
+
+	// 소유 클라가 마지막으로 보낸 교체 요청 번호.
+	uint8 LocalEquipRequestId = 0;
+
+	// RefreshActiveEquipment가 마지막으로 반영한 슬롯(같은 총 → 같은 총이어도 슬롯이 바뀌면 교체로 본다).
+	EValorWeaponSlot LastAppliedActiveSlot = EValorWeaponSlot::Melee;
 
 	FGameplayAbilitySpecHandle FireAbilityHandle;
 	FGameplayAbilitySpecHandle ReloadAbilityHandle;

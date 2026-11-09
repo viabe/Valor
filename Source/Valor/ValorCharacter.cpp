@@ -7,6 +7,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/ValorCharacterMovementComponent.h"
 #include "Components/ValorCombatComponent.h"
 #include "Components/ValorCameraComponent.h"
 #include "Components/ValorInputRouterComponent.h"
@@ -23,7 +24,8 @@
 #include "Player/ValorPlayerController.h"
 #include "ValorGameMode.h"
 
-AValorCharacter::AValorCharacter()
+AValorCharacter::AValorCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UValorCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = false;
 	bReplicates = true;
@@ -57,8 +59,6 @@ AValorCharacter::AValorCharacter()
 	MovementComponent->JumpZVelocity = 700.0f;
 	MovementComponent->AirControl = 0.35f;
 	MovementComponent->GetNavAgentPropertiesRef().bCanCrouch = true;
-	MovementComponent->MaxWalkSpeed = RunSpeed;
-	MovementComponent->MaxWalkSpeedCrouched = CrouchSpeed;
 	MovementComponent->MinAnalogWalkSpeed = 20.0f;
 	MovementComponent->BrakingDecelerationWalking = 2000.0f;
 	MovementComponent->BrakingDecelerationFalling = 1500.0f;
@@ -100,7 +100,6 @@ void AValorCharacter::BeginPlay()
 		CameraLogicComponent->ConfigureFirstPersonView(this, CameraBoom, FollowCamera);
 	}
 
-	RefreshMovementSpeed();
 	RefreshFirstPersonPresentation();
 	InitializeAbilityActorInfo();
 
@@ -228,22 +227,14 @@ void AValorCharacter::HandleWalkInputPressed()
 		return;
 	}
 
+	// 걷기는 이동 예측 데이터(압축 플래그)로 서버에 간다. 별도 RPC가 없어야 "걷기 시작 직전 이동"과 "직후 이동"이 서버에서도
+	// 정확히 같은 속도로 재시뮬레이션된다.
 	SetWalkIntent(true);
-
-	if (!HasAuthority())
-	{
-		ServerSetWalkPressed(true);
-	}
 }
 
 void AValorCharacter::HandleWalkInputReleased()
 {
 	SetWalkIntent(false);
-
-	if (!HasAuthority())
-	{
-		ServerSetWalkPressed(false);
-	}
 }
 
 void AValorCharacter::HandleCrouchInputPressed()
@@ -317,6 +308,41 @@ void AValorCharacter::HandleInteractInputPressed()
 	{
 		CombatComponent->HandleInteractInputPressed();
 	}
+}
+
+void AValorCharacter::HandleEquipSlotInput(EValorWeaponSlot Slot)
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleEquipSlotInput(Slot);
+	}
+}
+
+void AValorCharacter::HandleCycleWeaponInput(int32 Direction)
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleCycleWeaponInput(Direction);
+	}
+}
+
+void AValorCharacter::HandleDropWeaponInput()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->HandleDropWeaponInput();
+	}
+}
+
+bool AValorCharacter::IsWalkInputActive() const
+{
+	const UValorCharacterMovementComponent* MovementComponent = GetValorMovement();
+	return MovementComponent && MovementComponent->WantsToWalk();
+}
+
+UValorCharacterMovementComponent* AValorCharacter::GetValorMovement() const
+{
+	return Cast<UValorCharacterMovementComponent>(GetCharacterMovement());
 }
 
 USceneComponent* AValorCharacter::GetWeaponAttachComponent() const
@@ -537,22 +563,6 @@ void AValorCharacter::ServerSetJumpPressed_Implementation(bool bPressed)
 	MulticastPlayJumpCue();
 }
 
-void AValorCharacter::ServerSetWalkPressed_Implementation(bool bPressed)
-{
-	if (bIsDead)
-	{
-		return;
-	}
-
-	// 걷기 상태는 서버가 최종 속도를 확정해야 원격 클라이언트와 판정 기준이 어긋나지 않는다.
-	SetWalkIntent(bPressed);
-
-	if (CharacterStateComponent)
-	{
-		CharacterStateComponent->ServerEvaluateMovementState();
-	}
-}
-
 void AValorCharacter::ServerSetCrouchPressed_Implementation(bool bPressed)
 {
 	if (bIsDead)
@@ -728,13 +738,13 @@ void AValorCharacter::HandleMovementStateChanged(EValorMovementState PreviousMov
 
 void AValorCharacter::SetWalkIntent(bool bNewWantsToWalk)
 {
-	if (bWantsToWalk == bNewWantsToWalk)
+	UValorCharacterMovementComponent* MovementComponent = GetValorMovement();
+	if (!MovementComponent || MovementComponent->WantsToWalk() == bNewWantsToWalk)
 	{
 		return;
 	}
 
-	bWantsToWalk = bNewWantsToWalk;
-	RefreshMovementSpeed();
+	MovementComponent->SetWantsToWalk(bNewWantsToWalk);
 
 	if (HasAuthority() && CharacterStateComponent)
 	{
@@ -760,29 +770,8 @@ void AValorCharacter::SetCrouchIntent(bool bNewWantsToCrouch)
 		UnCrouch();
 	}
 
-	RefreshMovementSpeed();
-
 	if (HasAuthority() && CharacterStateComponent)
 	{
 		CharacterStateComponent->ServerEvaluateMovementState();
 	}
-}
-
-void AValorCharacter::RefreshMovementSpeed()
-{
-	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
-	if (!MovementComponent)
-	{
-		return;
-	}
-
-	MovementComponent->MaxWalkSpeedCrouched = CrouchSpeed;
-
-	if (bWantsToCrouch || bIsCrouched)
-	{
-		MovementComponent->MaxWalkSpeed = CrouchSpeed;
-		return;
-	}
-
-	MovementComponent->MaxWalkSpeed = bWantsToWalk ? WalkSpeed : RunSpeed;
 }

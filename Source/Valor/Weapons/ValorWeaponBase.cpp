@@ -88,6 +88,15 @@ AValorWeaponBase::AValorWeaponBase()
 	FMemory::Memset(PredictedRoundsByShot, 1, sizeof(PredictedRoundsByShot));
 }
 
+void AValorWeaponBase::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	// 생성자의 WeaponMesh 설정만으로는 부족하다: BP에서 추가한 부품 메시(오퍼레이터 등)는 기본 충돌이 켜진 채 생성된다.
+	// 서버·클라 모두 액터 생성 시 한 번 실행되고, 이후 충돌을 다시 켜는 코드는 없다.
+	ValorInventory::DisableHeldWeaponCollision(*this);
+}
+
 void AValorWeaponBase::BeginPlay()
 {
 	Super::BeginPlay();
@@ -146,6 +155,7 @@ void AValorWeaponBase::OnEquippedBy(AValorCharacter* NewOwnerCharacter)
 
 void AValorWeaponBase::OnUnequipped()
 {
+	bHolstered = false;
 	SetScopedViewHidden(false);
 
 	if (WeaponMesh)
@@ -508,10 +518,54 @@ float AValorWeaponBase::GetADSFireDelay() const
 
 void AValorWeaponBase::SetScopedViewHidden(bool bHideForScope)
 {
-	if (WeaponMesh && WeaponMesh->IsVisible() == bHideForScope)
+	bScopeViewHidden = bHideForScope;
+	RefreshMeshVisibility();
+}
+
+void AValorWeaponBase::SetHolstered(bool bNewHolstered)
+{
+	bHolstered = bNewHolstered;
+	RefreshMeshVisibility();
+}
+
+void AValorWeaponBase::RefreshMeshVisibility()
+{
+	// 루트부터 자식 전체에 적용한다. WeaponMesh만 바꾸면 BP에서 루트 아래에 따로 붙인 부품 메시(오퍼레이터 등)가
+	// 칼로 바꾼 뒤에도 손에 남거나, 조준경 화면을 가린다. 가시성은 복제되지 않는 로컬 연출이다.
+	const bool bShouldBeVisible = !bHolstered && !bScopeViewHidden;
+	if (Root && Root->IsVisible() != bShouldBeVisible)
 	{
-		WeaponMesh->SetVisibility(!bHideForScope, true);
+		Root->SetVisibility(bShouldBeVisible, true);
 	}
+}
+
+void AValorWeaponBase::CancelBurst()
+{
+	SprayState.ShotsInBurst = 0;
+}
+
+EValorWeaponSlot AValorWeaponBase::GetInventorySlot() const
+{
+	return ValorInventory::SlotForCategory(GetWeaponConfig().Category);
+}
+
+float AValorWeaponBase::GetEquipTime() const
+{
+	return FMath::Max(GetWeaponConfig().EquipTimeSeconds, 0.0f);
+}
+
+float AValorWeaponBase::GetMoveSpeedMultiplier(bool bIsADS) const
+{
+	const FValorWeaponConfig& Config = GetWeaponConfig();
+	float Multiplier = Config.HipFire.MoveSpeedMultiplier;
+
+	// 우클릭이 조준인 총만 ADS 배율을 쓴다. 클래식·버키의 AltFire 값은 "우클릭 공격" 모드라 이동 속도와 무관하다.
+	if (bIsADS && GetMaxZoomLevel() > 0)
+	{
+		Multiplier *= Config.AltFire.MoveSpeedMultiplier;
+	}
+
+	return FMath::Clamp(Multiplier, 0.1f, 1.0f);
 }
 
 float AValorWeaponBase::GetADSInterpSpeed() const

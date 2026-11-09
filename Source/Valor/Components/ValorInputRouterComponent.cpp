@@ -4,7 +4,9 @@
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
+#include "InputAction.h"
 #include "InputActionValue.h"
+#include "InputMappingContext.h"
 #include "../ValorCharacter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogValorInputRouter, Log, All);
@@ -22,14 +24,12 @@ void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponen
 		return;
 	}
 
-	if (MappingContext)
+	UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer());
+	if (MappingContext && Subsystem)
 	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
-		{
-			// 재시작 시 중복 등록되지 않도록 한 번 제거 후 다시 추가한다.
-			Subsystem->RemoveMappingContext(MappingContext);
-			Subsystem->AddMappingContext(MappingContext, 0);
-		}
+		// 재시작 시 중복 등록되지 않도록 한 번 제거 후 다시 추가한다.
+		Subsystem->RemoveMappingContext(MappingContext);
+		Subsystem->AddMappingContext(MappingContext, 0);
 	}
 
 	UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent);
@@ -38,6 +38,8 @@ void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponen
 		UE_LOG(LogValorInputRouter, Error, TEXT("Enhanced Input Component를 찾지 못했습니다: %s"), *GetNameSafe(OwnerCharacter));
 		return;
 	}
+
+	SetupWeaponSlotInput(EnhancedInputComponent, Subsystem);
 
 	if (JumpAction)
 	{
@@ -96,6 +98,49 @@ void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponen
 	{
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &UValorInputRouterComponent::HandleLook);
 	}
+}
+
+UInputAction* UValorInputRouterComponent::CreateBooleanAction(const TCHAR* ActionName)
+{
+	UInputAction* Action = NewObject<UInputAction>(this, FName(ActionName), RF_Transient);
+	Action->ValueType = EInputActionValueType::Boolean;
+	return Action;
+}
+
+void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* EnhancedInputComponent, UEnhancedInputLocalPlayerSubsystem* Subsystem)
+{
+	// 컨텍스트·액션은 처음 한 번만 만들고, 바인딩은 입력 컴포넌트가 새로 만들어질 때(빙의할 때)마다 다시 건다.
+	if (!WeaponSlotMappingContext)
+	{
+		WeaponSlotMappingContext = NewObject<UInputMappingContext>(this, TEXT("WeaponSlotMappingContext"), RF_Transient);
+		EquipPrimaryAction = CreateBooleanAction(TEXT("IA_EquipPrimary"));
+		EquipSecondaryAction = CreateBooleanAction(TEXT("IA_EquipSecondary"));
+		EquipMeleeAction = CreateBooleanAction(TEXT("IA_EquipMelee"));
+		NextWeaponAction = CreateBooleanAction(TEXT("IA_NextWeapon"));
+		PreviousWeaponAction = CreateBooleanAction(TEXT("IA_PreviousWeapon"));
+		DropWeaponAction = CreateBooleanAction(TEXT("IA_DropWeapon"));
+
+		// 발로란트 기본 키: 1 주무기 / 2 보조무기 / 3 근접 / G 버리기. 휠은 다음·이전 무기(아래 = 다음).
+		WeaponSlotMappingContext->MapKey(EquipPrimaryAction, EKeys::One);
+		WeaponSlotMappingContext->MapKey(EquipSecondaryAction, EKeys::Two);
+		WeaponSlotMappingContext->MapKey(EquipMeleeAction, EKeys::Three);
+		WeaponSlotMappingContext->MapKey(NextWeaponAction, EKeys::MouseScrollDown);
+		WeaponSlotMappingContext->MapKey(PreviousWeaponAction, EKeys::MouseScrollUp);
+		WeaponSlotMappingContext->MapKey(DropWeaponAction, EKeys::G);
+	}
+
+	if (Subsystem)
+	{
+		Subsystem->RemoveMappingContext(WeaponSlotMappingContext);
+		Subsystem->AddMappingContext(WeaponSlotMappingContext, 1);
+	}
+
+	EnhancedInputComponent->BindAction(EquipPrimaryAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleEquipPrimaryStarted);
+	EnhancedInputComponent->BindAction(EquipSecondaryAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleEquipSecondaryStarted);
+	EnhancedInputComponent->BindAction(EquipMeleeAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleEquipMeleeStarted);
+	EnhancedInputComponent->BindAction(NextWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleNextWeaponStarted);
+	EnhancedInputComponent->BindAction(PreviousWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandlePreviousWeaponStarted);
+	EnhancedInputComponent->BindAction(DropWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleDropWeaponStarted);
 }
 
 void UValorInputRouterComponent::HandleMove(const FInputActionValue& Value)
@@ -207,5 +252,53 @@ void UValorInputRouterComponent::HandleInteractStarted(const FInputActionValue& 
 	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
 	{
 		OwnerCharacter->HandleInteractInputPressed();
+	}
+}
+
+void UValorInputRouterComponent::HandleEquipPrimaryStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleEquipSlotInput(EValorWeaponSlot::Primary);
+	}
+}
+
+void UValorInputRouterComponent::HandleEquipSecondaryStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleEquipSlotInput(EValorWeaponSlot::Secondary);
+	}
+}
+
+void UValorInputRouterComponent::HandleEquipMeleeStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleEquipSlotInput(EValorWeaponSlot::Melee);
+	}
+}
+
+void UValorInputRouterComponent::HandleNextWeaponStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleCycleWeaponInput(1);
+	}
+}
+
+void UValorInputRouterComponent::HandlePreviousWeaponStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleCycleWeaponInput(-1);
+	}
+}
+
+void UValorInputRouterComponent::HandleDropWeaponStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleDropWeaponInput();
 	}
 }

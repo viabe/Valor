@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Weapons/Data/ValorWeaponDataAsset.h"
+#include "Weapons/ValorInventoryTypes.h"
 #include "Weapons/ValorWeaponTypes.h"
 #include "ValorWeaponBase.generated.h"
 
@@ -35,6 +36,8 @@ class VALOR_API AValorWeaponBase : public AActor
 public:
 	AValorWeaponBase();
 
+	// 블루프린트 컴포넌트까지 만들어진 뒤 무기 충돌을 모두 끈다(ValorInventory::DisableHeldWeaponCollision 참고).
+	virtual void PostInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -42,6 +45,25 @@ public:
 	void OnUnequipped();
 
 	const FValorWeaponConfig& GetWeaponConfig() const;
+
+	// === 슬롯 / 장착 / 이동 속도 ===
+
+	// 이 총이 들어가는 슬롯(권총 = 보조무기, 나머지 = 주무기).
+	EValorWeaponSlot GetInventorySlot() const;
+
+	// 꺼내서 쏠 수 있을 때까지의 시간(초). 데이터 에셋 EquipTimeSeconds(위키 "Equip Speeds ... (Normal)").
+	float GetEquipTime() const;
+
+	// 이 총을 들고 있을 때 이동 속도 배율(칼 6.75m/s 대비). 조준 중이면 ADS 배율(힙 대비 값)을 곱한다.
+	// 예) 밴달 0.8 → 5.4m/s, 조준 0.8 × 0.76 → 4.1m/s(위키 "Move Speed 76% (4.104 m/sec)").
+	float GetMoveSpeedMultiplier(bool bIsADS) const;
+
+	// 집어넣기/꺼내기(로컬 연출 전용 숨김). 조준경 숨김과 합쳐 메시 가시성을 정하므로 서로 덮어쓰지 않는다.
+	void SetHolstered(bool bNewHolstered);
+
+	// 집어넣을 때 진행 중이던 점사를 끊는다. 서버와 예측 클라가 같은 발사 순서 위치에서 호출하므로(교체 RPC가 발사 RPC와
+	// 같은 신뢰성 순서로 도착) 두 쪽의 "다음 발 간격" 계산이 계속 일치한다.
+	void CancelBurst();
 
 	// === 사격(결정적 시뮬레이션) ===
 
@@ -195,6 +217,12 @@ protected:
 
 private:
 	void RefreshWeaponMeshAlignment();
+
+	// 메시 가시성 = 손에 들고 있고(집어넣지 않음) 조준경 화면이 아님.
+	void RefreshMeshVisibility();
+
+	bool bHolstered = false;
+	bool bScopeViewHidden = false;
 
 	// 반동/탄퍼짐 스프레이 상태(서버 = 권위, 소유 클라 = 예측). 복제하지 않는다.
 	FValorSprayState SprayState;

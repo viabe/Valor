@@ -47,9 +47,14 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Respawn", meta=(ClampMin="0.0"))
 	float CorpseLifeSpanAfterRespawn = 5.0f;
 
-	// 스폰할 때 쥐여 줄 무기(데스매치 기본 지급). 비우면 맨손으로 시작해 바닥 총을 주워야 한다.
+	// 스폰할 때 주무기 칸에 넣고 들고 시작할 무기(데스매치 기본 지급). 비우면 칼(과 보조무기)로 시작해 바닥 총을 주워야 한다.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Loadout")
 	TSubclassOf<AValorWeaponBase> StartingWeaponClass;
+
+	// 스폰할 때 보조무기 칸에 넣을 무기(발로란트 기본 지급 = 클래식). 소프트 참조인 이유: 클래식 BP(메시 연결)는 아직 없을 수 있고,
+	// 하드 참조(FClassFinder)는 에셋이 없으면 시작할 때마다 오류를 남긴다. 에셋이 있을 때만 불러 지급한다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Loadout")
+	TSoftClassPtr<AValorWeaponBase> StartingSecondaryWeaponClass;
 
 	// 스폰할 때 채워 줄 실드(발로란트 중형 실드 = 50). 0이면 실드 없이 시작한다.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Loadout", meta=(ClampMin="0.0"))
@@ -57,4 +62,12 @@ protected:
 
 private:
 	void RespawnPlayer(TWeakObjectPtr<AController> ControllerToRespawn);
+
+	// 기본 보조무기 클래스를 (있으면) 한 번 불러 캐시한다.
+	TSubclassOf<AValorWeaponBase> ResolveStartingSecondaryWeaponClass();
+
+	UPROPERTY(Transient)
+	TSubclassOf<AValorWeaponBase> ResolvedStartingSecondaryWeaponClass;
+
+	bool bStartingSecondaryResolved = false;
 };

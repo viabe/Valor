@@ -453,13 +453,30 @@ void AValorHUD::DrawVitals(const AValorCharacter& Character, const UValorCombatC
 		DrawShadowedText(TEXT("SHIELD"), LabelColor, ShieldRightX, BaseY + HealthHeight, SmallFont, UIScale, 1.0f);
 	}
 
-	// 탄약(탄창 큰 숫자 / 예비 작은 숫자)과 무기 이름. 탄창은 소유 클라 예측값이라 쏘는 즉시 줄어든다.
-	if (!CombatComponent || !CombatComponent->GetEquippedWeapon())
+	if (!CombatComponent)
 	{
 		return;
 	}
 
+	DrawWeaponSlots(*CombatComponent, UIScale);
+
 	const float AmmoLeftX = CenterX + (200.0f * UIScale);
+	const FLinearColor StatusColor(1.0f, 0.85f, 0.3f, 1.0f);
+
+	// 칼: 탄약 대신 이름만 크게 보여 준다.
+	if (!CombatComponent->GetEquippedWeapon())
+	{
+		const FString MeleeName = CombatComponent->GetSlotDisplayName(EValorWeaponSlot::Melee).ToString().ToUpper();
+		const float NameHeight = DrawShadowedText(MeleeName, FLinearColor::White, AmmoLeftX, BaseY, MediumFont, 1.6f * UIScale, 0.0f);
+		if (!CombatComponent->IsEquipReady())
+		{
+			DrawShadowedText(TEXT("EQUIPPING"), StatusColor, AmmoLeftX, BaseY + NameHeight, SmallFont, UIScale, 0.0f);
+		}
+
+		return;
+	}
+
+	// 탄약(탄창 큰 숫자 / 예비 작은 숫자)과 무기 이름. 탄창은 소유 클라 예측값이라 쏘는 즉시 줄어든다.
 	const int32 MagazineAmmo = CombatComponent->GetDisplayedMagazineAmmo();
 	const FString MagazineText = FString::FromInt(MagazineAmmo);
 	const FLinearColor MagazineColor = MagazineAmmo == 0 ? FLinearColor(1.0f, 0.35f, 0.35f, 1.0f) : FLinearColor::White;
@@ -475,7 +492,64 @@ void AValorHUD::DrawVitals(const AValorCharacter& Character, const UValorCombatC
 	LabelY += DrawShadowedText(CombatComponent->GetEquippedWeaponDisplayName().ToString().ToUpper(), LabelColor, AmmoLeftX, LabelY, SmallFont, UIScale, 0.0f);
 	if (CombatComponent->IsReloading())
 	{
-		DrawShadowedText(TEXT("RELOADING"), FLinearColor(1.0f, 0.85f, 0.3f, 1.0f), AmmoLeftX, LabelY, SmallFont, UIScale, 0.0f);
+		DrawShadowedText(TEXT("RELOADING"), StatusColor, AmmoLeftX, LabelY, SmallFont, UIScale, 0.0f);
+	}
+	else if (!CombatComponent->IsEquipReady())
+	{
+		DrawShadowedText(TEXT("EQUIPPING"), StatusColor, AmmoLeftX, LabelY, SmallFont, UIScale, 0.0f);
+	}
+}
+
+void AValorHUD::DrawWeaponSlots(const UValorCombatComponent& CombatComponent, float UIScale)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	struct FSlotRow
+	{
+		EValorWeaponSlot Slot;
+		const TCHAR* Key;
+	};
+
+	static constexpr FSlotRow Rows[] =
+	{
+		{EValorWeaponSlot::Primary, TEXT("1")},
+		{EValorWeaponSlot::Secondary, TEXT("2")},
+		{EValorWeaponSlot::Melee, TEXT("3")},
+	};
+
+	UFont* Font = GEngine->GetSmallFont();
+	const float RightX = Canvas->ClipX - (32.0f * UIScale);
+	const float RowHeight = 22.0f * UIScale;
+	const EValorWeaponSlot ActiveSlot = CombatComponent.GetActiveSlot();
+	float Y = Canvas->ClipY - (190.0f * UIScale);
+
+	for (const FSlotRow& Row : Rows)
+	{
+		const FText SlotName = CombatComponent.GetSlotDisplayName(Row.Slot);
+		if (SlotName.IsEmpty())
+		{
+			continue;
+		}
+
+		const bool bActive = Row.Slot == ActiveSlot;
+		const FLinearColor RowColor = bActive ? FLinearColor::White : FLinearColor(0.6f, 0.6f, 0.6f, 0.75f);
+		const float TextScale = (bActive ? 1.15f : 1.0f) * UIScale;
+		DrawShadowedText(FString::Printf(TEXT("%s   %s"), *SlotName.ToString().ToUpper(), Row.Key), RowColor, RightX, Y, Font, TextScale, 1.0f);
+
+		// 장착 중: 든 슬롯 아래에 진행 막대(장착 시간 동안 채워진다). 다 차야 쏠 수 있다.
+		if (bActive && !CombatComponent.IsEquipReady())
+		{
+			const float BarWidth = 90.0f * UIScale;
+			const float BarHeight = 2.0f * UIScale;
+			const float BarY = Y + RowHeight - (3.0f * UIScale);
+			DrawRect2D(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), RightX - BarWidth, BarY, BarWidth, BarHeight, 1.0f);
+			DrawRect2D(FLinearColor(1.0f, 0.85f, 0.3f, 1.0f), RightX - BarWidth, BarY, BarWidth * CombatComponent.GetEquipProgress(), BarHeight, 1.0f);
+		}
+
+		Y += RowHeight;
 	}
 }
 

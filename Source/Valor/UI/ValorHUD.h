@@ -165,6 +165,9 @@ private:
 	void DrawHitMarker(float CenterX, float CenterY, float UIScale);
 	void DrawDamageIndicators(float CenterX, float CenterY, float UIScale);
 	void DrawVitals(const class AValorCharacter& Character, const class UValorCombatComponent* CombatComponent, float CenterX, float UIScale);
+
+	// 무기 슬롯 목록(오른쪽 아래, 1 주무기 / 2 보조무기 / 3 칼). 든 슬롯은 밝게, 장착 중이면 진행 막대를 그린다.
+	void DrawWeaponSlots(const class UValorCombatComponent& CombatComponent, float UIScale);
 	void DrawKillFeed(float UIScale);
 	void DrawScore(float CenterX, float UIScale);
 	void DrawDeathOverlay(float CenterX, float CenterY, float UIScale);

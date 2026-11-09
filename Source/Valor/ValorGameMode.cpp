@@ -7,6 +7,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
 #include "Engine/PlayerStartPIE.h"
+#include "Misc/PackageName.h"
 #include "Player/ValorPlayerController.h"
 #include "Player/ValorPlayerState.h"
 #include "TimerManager.h"
@@ -34,6 +35,34 @@ AValorGameMode::AValorGameMode()
 	{
 		StartingWeaponClass = DefaultStartingWeapon.Class;
 	}
+
+	// 기본 보조무기: 클래식 BP(BP_Vandal을 복제해 Weapon Data Asset = DA_Classic으로 지정하면 된다). 없으면 지급하지 않는다.
+	StartingSecondaryWeaponClass = TSoftClassPtr<AValorWeaponBase>(FSoftObjectPath(TEXT("/Game/Valor/Gun/BP_Classic.BP_Classic_C")));
+}
+
+TSubclassOf<AValorWeaponBase> AValorGameMode::ResolveStartingSecondaryWeaponClass()
+{
+	if (bStartingSecondaryResolved)
+	{
+		return ResolvedStartingSecondaryWeaponClass;
+	}
+
+	bStartingSecondaryResolved = true;
+	if (StartingSecondaryWeaponClass.IsNull())
+	{
+		return nullptr;
+	}
+
+	// 에셋이 없으면 조용히 건너뛴다(로드 실패 경고 대신 안내 한 줄). 첫 스폰에서 한 번만 동기 로드한다.
+	const FString PackageName = StartingSecondaryWeaponClass.ToSoftObjectPath().GetLongPackageName();
+	if (!FPackageName::DoesPackageExist(PackageName))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[Loadout] 기본 보조무기 %s 가 없어 보조무기 없이 스폰한다(BP_Vandal 복제 → DA_Classic 지정으로 만들 수 있다)."), *PackageName);
+		return nullptr;
+	}
+
+	ResolvedStartingSecondaryWeaponClass = StartingSecondaryWeaponClass.LoadSynchronous();
+	return ResolvedStartingSecondaryWeaponClass;
 }
 
 void AValorGameMode::HandleCharacterKilled(AValorCharacter* Victim, const FValorDamageEvent& KillingEvent)
@@ -237,11 +266,17 @@ void AValorGameMode::SetPlayerDefaults(APawn* PlayerPawn)
 		}
 	}
 
-	if (StartingWeaponClass)
+	// 기본 지급: 보조무기(있으면) → 주무기 순으로 넣고, 가장 좋은 무기를 들고 시작한다. 스폰 지급은 장착 시간 없이 바로 쏠 수 있다.
+	if (UValorCombatComponent* CombatComponent = Character->GetCombatComponent())
 	{
-		if (UValorCombatComponent* CombatComponent = Character->GetCombatComponent())
+		if (const TSubclassOf<AValorWeaponBase> SecondaryClass = ResolveStartingSecondaryWeaponClass())
 		{
-			CombatComponent->GiveWeapon(StartingWeaponClass);
+			CombatComponent->GiveWeapon(SecondaryClass, !StartingWeaponClass, true);
+		}
+
+		if (StartingWeaponClass)
+		{
+			CombatComponent->GiveWeapon(StartingWeaponClass, true, true);
 		}
 	}
 }
