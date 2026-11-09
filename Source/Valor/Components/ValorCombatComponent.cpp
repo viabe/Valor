@@ -3,8 +3,10 @@
 #include "AbilitySystem/Abilities/UGA_WeaponADS.h"
 #include "AbilitySystem/Abilities/UGA_WeaponFire.h"
 #include "AbilitySystem/Abilities/UGA_WeaponReload.h"
-#include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
+#include "AbilitySystem/Effects/ValorDamageGameplayEffect.h"
 #include "AbilitySystem/ValorAbilitySystemComponent.h"
+#include "AbilitySystem/ValorDamageTypes.h"
+#include "AbilitySystem/ValorGameplayTags.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/ValorCameraComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
@@ -69,7 +71,7 @@ void UValorCombatComponent::InitializeAbilityBindings(UValorAbilitySystemCompone
 
 void UValorCombatComponent::HandleFireInputPressed()
 {
-	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled())
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled() || !OwnerCharacter->IsAlive())
 	{
 		return;
 	}
@@ -97,7 +99,7 @@ void UValorCombatComponent::HandleFireInputReleased()
 
 void UValorCombatComponent::HandleReloadInputPressed()
 {
-	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled())
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled() || !OwnerCharacter->IsAlive())
 	{
 		return;
 	}
@@ -107,7 +109,7 @@ void UValorCombatComponent::HandleReloadInputPressed()
 
 void UValorCombatComponent::HandleADSInputPressed()
 {
-	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled())
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled() || !OwnerCharacter->IsAlive())
 	{
 		return;
 	}
@@ -206,7 +208,7 @@ void UValorCombatComponent::SetLocalZoomLevel(int32 NewZoomLevel)
 
 void UValorCombatComponent::HandleInteractInputPressed()
 {
-	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled())
+	if (!OwnerCharacter || !OwnerCharacter->IsLocallyControlled() || !OwnerCharacter->IsAlive())
 	{
 		return;
 	}
@@ -223,6 +225,13 @@ void UValorCombatComponent::TryFireLocalShot()
 	}
 
 	World->GetTimerManager().ClearTimer(LocalFireTimerHandle);
+
+	// 예약된 다음 발(연사·점사·탭 버퍼)이 사망 뒤에 불려도 쏘지 않는다. 서버도 State.Dead 태그로 따로 거부한다.
+	if (!OwnerCharacter->IsAlive())
+	{
+		bFireShotBuffered = false;
+		return;
+	}
 
 	// 버퍼된 탭은 이미 떼어진 버튼이라도 한 발은 쏘고, 그 다음 연사는 버튼을 누르고 있을 때만 이어간다.
 	// 점사는 한 번 시작하면 버튼을 떼도 끝까지 쏜다(발로란트 불독·스팅어 ADS).
@@ -457,7 +466,8 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 	OwnerCharacter->GetWeaponViewPoint(TraceStart, IgnoredViewRotation);
 
 	// 펠릿마다 발사 시각으로 되감아 판정하고(랙 보상), 한 대상에 맞은 펠릿 피해는 합산해 한 번에 적용한다.
-	TMap<AValorCharacter*, float> DamageByTarget;
+	// 대표 부위는 가장 치명적인 펠릿(머리 > 몸 > 다리), 관통은 한 알이라도 벽을 뚫었으면 관통으로 본다(킬피드 표시용).
+	TMap<AValorCharacter*, FValorPendingTargetDamage> DamageByTarget;
 	const float ShotTime = Request.ClientShotTime;
 	FValorShotEffects ShotEffects;
 	TraceShot(Request, ShotData, bAltMode, PelletCount, TraceStart, ShotEffects,
@@ -475,7 +485,10 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 					Damage *= EquippedWeapon->GetPenetrationDamageMultiplier();
 				}
 
-				DamageByTarget.FindOrAdd(HitResult.HitCharacter) += Damage;
+				FValorPendingTargetDamage& Pending = DamageByTarget.FindOrAdd(HitResult.HitCharacter);
+				Pending.Damage += Damage;
+				Pending.HitZone = ValorDamage::MoreSevereZone(Pending.HitZone, HitResult.HitZone);
+				Pending.bPenetrated |= HitResult.bPenetratedSurface;
 			}
 
 			OutImpact.ImpactPoint = HitResult.ImpactPoint;
@@ -485,12 +498,9 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 			return OutImpact.bBlockingHit;
 		});
 
-	for (const TPair<AValorCharacter*, float>& TargetDamage : DamageByTarget)
+	for (const TPair<AValorCharacter*, FValorPendingTargetDamage>& TargetDamage : DamageByTarget)
 	{
-		if (UValorAbilitySystemComponent* TargetASC = Cast<UValorAbilitySystemComponent>(TargetDamage.Key->GetAbilitySystemComponent()))
-		{
-			TargetASC->ApplyModToAttribute(UValorCombatAttributeSet::GetIncomingDamageAttribute(), EGameplayModOp::Additive, TargetDamage.Value);
-		}
+		ApplyDamageToTarget(TargetDamage.Key, TargetDamage.Value, TraceStart);
 	}
 
 	// 연출: 로컬 사수가 곧 서버인 리슨 호스트는 여기서 바로 재생하고, 나머지 클라는 멀티캐스트로 받는다.
@@ -506,6 +516,48 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 	{
 		HandleUnscopeAfterShot();
 	}
+}
+
+void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin)
+{
+	if (!Target || !Target->IsAlive() || !AbilitySystemComponent || !EquippedWeapon || PendingDamage.Damage <= 0.0f)
+	{
+		return;
+	}
+
+	UAbilitySystemComponent* TargetASC = Target->GetAbilitySystemComponent();
+	if (!TargetASC)
+	{
+		return;
+	}
+
+	// 피해는 사수의 ASC가 만든 GE 스펙으로 보낸다 → 대상 AttributeSet이 "누가(사수), 무엇으로(무기), 어디서(발사 위치)"를 안다.
+	// Instigator = 사수 캐릭터, EffectCauser = 무기 액터(킬피드 무기 이름), Origin = 사수 눈 위치(피격 방향 표시).
+	FGameplayEffectContextHandle Context = AbilitySystemComponent->MakeEffectContext();
+	Context.AddInstigator(OwnerCharacter, EquippedWeapon);
+	Context.AddSourceObject(EquippedWeapon);
+	Context.AddOrigin(ShotOrigin);
+
+	const FGameplayEffectSpecHandle SpecHandle = AbilitySystemComponent->MakeOutgoingSpec(UValorDamageGameplayEffect::StaticClass(), 1.0f, Context);
+	if (!SpecHandle.IsValid())
+	{
+		return;
+	}
+
+	SpecHandle.Data->SetSetByCallerMagnitude(ValorGameplayTags::SetByCaller_Damage, PendingDamage.Damage);
+
+	const FGameplayTag ZoneTag = ValorDamage::HitZoneToTag(PendingDamage.HitZone);
+	if (ZoneTag.IsValid())
+	{
+		SpecHandle.Data->AddDynamicAssetTag(ZoneTag);
+	}
+
+	if (PendingDamage.bPenetrated)
+	{
+		SpecHandle.Data->AddDynamicAssetTag(ValorGameplayTags::Damage_Penetrated);
+	}
+
+	AbilitySystemComponent->ApplyGameplayEffectSpecToTarget(*SpecHandle.Data.Get(), TargetASC);
 }
 
 bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
@@ -794,7 +846,7 @@ void UValorCombatComponent::ServerSetADSInput_Implementation(bool bNewADS)
 
 void UValorCombatComponent::ServerInteractWithPickup_Implementation()
 {
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !OwnerCharacter)
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !OwnerCharacter || !OwnerCharacter->IsAlive())
 	{
 		return;
 	}
@@ -993,6 +1045,64 @@ void UValorCombatComponent::DropEquippedWeapon()
 	WeaponToDrop->Destroy();
 }
 
+void UValorCombatComponent::HandleOwnerDeath()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// 모든 머신 공통: 발사 루프·재조준 예약을 끊고 로컬 조준 의도를 지운다(소유 클라는 OnRep_IsDead에서 이 함수를 부른다).
+	World->GetTimerManager().ClearTimer(LocalFireTimerHandle);
+	World->GetTimerManager().ClearTimer(ReScopeTimerHandle);
+	bLocalFireHeld = false;
+	bLocalAltFireHeld = false;
+	bLocalFiringAltAttack = false;
+	bFireShotBuffered = false;
+	bLocalADSButtonHeld = false;
+	bLocalADSIntent = false;
+	LocalZoomLevel = 0;
+
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		// 서버: 재장전을 취소하고(타이머가 죽은 뒤 탄을 채우지 않게), 들고 있던 총을 그 자리에 떨어뜨린다(발로란트: 시체 옆에 총이 남는다).
+		// 조준 어빌리티는 캐릭터가 CancelAllAbilities로 이미 끝냈다 → SetADSStateFromAbility(false)로 bIsADS가 내려간다.
+		World->GetTimerManager().ClearTimer(ReloadTimerHandle);
+		bIsReloading = false;
+		bIsADS = false;
+		DropEquippedWeapon();
+	}
+
+	RefreshADSOnLocalClient();
+}
+
+void UValorCombatComponent::GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass)
+{
+	// 리슨/스탠드얼론의 첫 스폰은 월드 BeginPlay 전에 GameMode가 부를 수 있어, BeginPlay에서 채우는 OwnerCharacter를 여기서도 확보한다.
+	if (!OwnerCharacter)
+	{
+		OwnerCharacter = Cast<AValorCharacter>(GetOwner());
+	}
+
+	UWorld* World = GetWorld();
+	if (!World || !GetOwner() || !GetOwner()->HasAuthority() || !OwnerCharacter || !WeaponClass)
+	{
+		return;
+	}
+
+	// 줍기와 같은 규칙으로 스폰한다(Owner/Instigator = 캐릭터 → 소유 클라에만 의미 있는 예측 탄약 등이 같은 경로로 동작).
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = OwnerCharacter;
+	SpawnParameters.Instigator = OwnerCharacter;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	if (AValorWeaponBase* NewWeapon = World->SpawnActor<AValorWeaponBase>(WeaponClass, OwnerCharacter->GetActorTransform(), SpawnParameters))
+	{
+		EquipWeapon(NewWeapon);
+	}
+}
+
 FTransform UValorCombatComponent::ComputeDropTransform() const
 {
 	const UWorld* World = GetWorld();
@@ -1187,7 +1297,8 @@ void UValorCombatComponent::PerformServerHitScan(const FVector& TraceStart, cons
 	for (TActorIterator<AValorCharacter> It(World); It; ++It)
 	{
 		AValorCharacter* CandidateCharacter = *It;
-		if (!CandidateCharacter || CandidateCharacter == OwnerCharacter)
+		// 시체는 판정 대상이 아니다(탄을 막지도, 피해를 받지도 않는다). 사망은 서버가 확정하므로 서버 상태만 본다.
+		if (!CandidateCharacter || CandidateCharacter == OwnerCharacter || !CandidateCharacter->IsAlive())
 		{
 			continue;
 		}

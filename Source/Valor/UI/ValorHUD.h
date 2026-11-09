@@ -107,12 +107,70 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Scope")
 	float ScopeCenterDotSize = 3.0f;
 
+	// === 전투 피드백(명중 확인 / 피격 방향 / 킬피드 / 체력·탄약 / 사망 화면) ===
+	// 발로란트 기본 HUD에는 히트마커가 없다(소리와 피격 리액션으로 안다). 개발 중 판정 확인용으로 기본 켜 두고
+	// 콘솔 Valor.HUD.HitMarker 0으로 끌 수 있다.
+
+	// 명중 표시 유지 시간(초). 처치는 더 오래 보여 준다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.05"))
+	float HitMarkerDuration = 0.25f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.05"))
+	float KillHitMarkerDuration = 0.5f;
+
+	// 히트마커 대각선 길이와 중앙 빈틈(1080p 기준 픽셀).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	float HitMarkerLength = 7.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	float HitMarkerGap = 7.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	FLinearColor BodyHitColor = FLinearColor(1.0f, 1.0f, 1.0f, 1.0f);
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	FLinearColor HeadHitColor = FLinearColor(1.0f, 0.85f, 0.2f, 1.0f);
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	FLinearColor KillHitColor = FLinearColor(1.0f, 0.25f, 0.25f, 1.0f);
+
+	// 피격 방향 표시: 화면 중앙을 둘러싼 고리에서 피해가 온 방향의 붉은 호.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.1"))
+	float DamageIndicatorDuration = 1.2f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	float DamageIndicatorRadius = 150.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	float DamageIndicatorThickness = 10.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="5.0", ClampMax="180.0"))
+	float DamageIndicatorArcDegrees = 40.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
+	FLinearColor DamageIndicatorColor = FLinearColor(0.9f, 0.1f, 0.1f, 0.85f);
+
+	// 킬피드 한 줄이 화면에 남아 있는 시간(초).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.5"))
+	float KillFeedDuration = 6.0f;
+
 private:
 	// 조준경 화면: 머티리얼이 있으면 화면 전체에 그리고, 없으면 원형 마스크 + 조준선을 직접 그린다.
 	void DrawScopeOverlay(const class AValorWeaponBase& Weapon, float CenterX, float CenterY, float UIScale);
 	void DrawCrosshairLines(float CenterX, float CenterY, float Length, float Thickness, float Offset, float Opacity);
 	void DrawRect2D(const FLinearColor& Color, float X, float Y, float Width, float Height, float Opacity);
 	void DrawRecoilDebug(float CenterX, float CenterY, float FocalLengthPixels, const FValorSprayEvaluation& Spray, const FValorShooterStance& Stance, const FRotator& AppliedViewOffset);
+
+	// 전투 피드백. 데이터는 로컬 컨트롤러(명중/피격/사망), GameState(킬피드), PlayerState(전적), 캐릭터(체력/실드)에서 읽기만 한다.
+	void DrawHitMarker(float CenterX, float CenterY, float UIScale);
+	void DrawDamageIndicators(float CenterX, float CenterY, float UIScale);
+	void DrawVitals(const class AValorCharacter& Character, const class UValorCombatComponent* CombatComponent, float CenterX, float UIScale);
+	void DrawKillFeed(float UIScale);
+	void DrawScore(float CenterX, float UIScale);
+	void DrawDeathOverlay(float CenterX, float CenterY, float UIScale);
+
+	// 그림자 있는 텍스트. AlignX: 0 = 왼쪽 정렬, 0.5 = 가운데, 1 = 오른쪽. 그린 높이를 돌려준다(줄 쌓기용).
+	float DrawShadowedText(const FString& Text, const FLinearColor& Color, float X, float Y, class UFont* Font, float Scale, float AlignX);
 
 	// 화면 중앙에서 각도(도)만큼 떨어진 지점까지의 픽셀 거리. 원근 투영이므로 tan(각도) × 초점거리(픽셀)이다.
 	static float AngleToPixels(float AngleDegrees, float FocalLengthPixels);

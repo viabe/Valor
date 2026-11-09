@@ -15,6 +15,14 @@ class UGameplayAbility;
 class UValorAbilitySystemComponent;
 class UValorCombatAttributeSet;
 
+// 한 발이 한 대상에게 준 피해(펠릿 합산). 서버 내부 전용.
+struct FValorPendingTargetDamage
+{
+	float Damage = 0.0f;
+	EValorHitZone HitZone = EValorHitZone::None;
+	bool bPenetrated = false;
+};
+
 // 서버 히트스캔 결과(서버 내부 전용, 복제하지 않음).
 struct FValorHitScanResult
 {
@@ -69,6 +77,13 @@ public:
 	void ExecuteServerFireAbility();
 	void ExecuteServerReloadAbility();
 	void SetADSStateFromAbility(bool bNewADS);
+
+	// 소유 캐릭터가 죽었을 때 호출한다(서버: 캐릭터의 사망 처리, 클라: OnRep_IsDead).
+	// 모든 머신: 발사 루프·조준 상태 정리. 서버: 재장전 취소 + 들고 있던 총을 바닥에 떨어뜨림.
+	void HandleOwnerDeath();
+
+	// 서버 전용: 무기 클래스를 스폰해 장착한다(스폰 시 기본 무기). 들고 있던 총은 교체 규칙대로 바닥에 떨어진다.
+	void GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass);
 
 	UFUNCTION(BlueprintPure, Category="Valor|Combat")
 	AValorWeaponBase* GetEquippedWeapon() const { return EquippedWeapon; }
@@ -285,6 +300,9 @@ private:
 
 	// 서버 전용: 조준선에 가장 가까운 줍기 가능한 픽업(거리·줍기 반경·시야 확인). 없으면 nullptr.
 	AValorWeaponPickup* FindPickupInView() const;
+
+	// 서버 전용: 한 대상에게 이번 발의 피해를 GAS 피해 GE로 적용한다(사수/무기/발사 위치/부위를 스펙에 싣는다).
+	void ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin);
 
 	void PerformServerHitScan(const FVector& TraceStart, const FVector& ShotDirection, float MaxDistance, float ClientShotTimestampSeconds, FValorHitScanResult& OutResult) const;
 

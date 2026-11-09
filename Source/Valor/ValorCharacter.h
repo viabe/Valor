@@ -19,6 +19,7 @@ class UValorCharacterStateComponent;
 class UValorCombatComponent;
 class UValorInputRouterComponent;
 class UValorLagCompensationComponent;
+struct FValorDamageEvent;
 
 UCLASS(config=Game)
 class VALOR_API AValorCharacter : public ACharacter, public IValorWeaponOwnerInterface, public IAbilitySystemInterface
@@ -95,6 +96,10 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Valor|Components", meta = (AllowPrivateAccess = "true"))
 	UValorInputRouterComponent* InputRouterComponent;
 
+	// 사망 후 시점: 카메라 붐을 이만큼(cm) 뒤로 빼서 자기 시체(래그돌)를 내려다본다. 마우스로 둘러볼 수 있다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Death", meta = (AllowPrivateAccess = "true", ClampMin = "0.0"))
+	float DeathCameraArmLength = 300.0f;
+
 	// 무기 시스템이 사용할 기본 부착 소켓 이름이다.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Weapon", meta = (AllowPrivateAccess = "true"))
 	FName WeaponAttachSocketName = TEXT("hand_r_socket");
@@ -121,6 +126,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void OnRep_Controller() override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 	// 입력 라우터가 전달한 이동 입력을 처리한다.
@@ -186,7 +192,9 @@ public:
 	FORCEINLINE UValorLagCompensationComponent* GetLagCompensationComponent() const { return LagCompensationComponent; }
 	FORCEINLINE const UValorCombatAttributeSet* GetCombatAttributeSet() const { return CombatAttributeSet; }
 
+	// 살아 있는가: 서버가 사망을 확정하지 않았고 체력이 남아 있음. 서버 판정(히트스캔 대상, 어빌리티)과 로컬 입력 차단이 모두 이 값을 본다.
 	bool IsAlive() const;
+	bool IsDead() const { return bIsDead; }
 
 protected:
 	// 이동 입력은 클라이언트 예측을 유지하되, 서버에도 검증용으로 전달한다.
@@ -225,7 +233,24 @@ protected:
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastHandleMovementStateChanged(EValorMovementState NewMovementState);
 
+	// 사망 상태. 서버만 true로 바꾸고 모두에게 복제한다(시체 래그돌·입력 차단·HUD 사망 화면이 이 값으로 갈린다).
+	// 체력 0 복제만으로도 알 수 있지만, "사망 처리 완료"라는 별도 사건이 있어야 래그돌/드롭이 정확히 한 번 일어난다.
+	UPROPERTY(ReplicatedUsing=OnRep_IsDead, VisibleInstanceOnly, BlueprintReadOnly, Category = "Valor|Death")
+	bool bIsDead = false;
+
+	UFUNCTION()
+	void OnRep_IsDead();
+
 private:
+	// 서버 전용: AttributeSet이 피해를 적용한 직후 호출된다. 피격/명중 알림을 보내고, 체력이 0이 됐으면 사망 처리한다.
+	void HandleDamageApplied(const FValorDamageEvent& DamageEvent);
+
+	// 서버 전용: 사망 확정 → State.Dead 태그, 어빌리티 취소, 총 드롭, 이동/충돌 끄기, GameMode에 킬 보고.
+	void Die(const FValorDamageEvent& KillingEvent);
+
+	// 모든 머신: 사망 연출(이동 정지, 캡슐 충돌 끄기, 래그돌, 로컬 사망 시점). 서버는 Die에서, 클라는 OnRep_IsDead에서 호출한다.
+	void ApplyDeathPresentation();
+
 	void BuildDefaultInputMapping();
 	void InitializeAbilityActorInfo();
 	void RefreshFirstPersonPresentation();

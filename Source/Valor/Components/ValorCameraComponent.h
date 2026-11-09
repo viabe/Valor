@@ -42,6 +42,10 @@ public:
 	// ADS는 로컬 카메라 연출만 즉시 반영하고, 실제 명중 판정은 서버 상태를 따른다.
 	void SetADSState(bool bNewADS, float ADSFieldOfView, float InterpSpeed);
 
+	// 로컬 플레이어가 죽었을 때: 조준 FOV를 풀고, 카메라 붐을 뒤로 빼서 자기 시체(래그돌)를 3인칭으로 보여 준다.
+	// 붐은 컨트롤 회전을 따르므로 마우스로 시체 주위를 둘러볼 수 있다. 부활하면 새 캐릭터가 1인칭 설정으로 다시 시작한다.
+	void EnterDeathView(ACharacter* OwningCharacter, USpringArmComponent* CameraBoom, float ArmLength);
+
 	// 로컬 사수가 한 발 쏠 때(예측 클라/리슨 호스트) 호출된다. 화면을 위로 튀게 하는 킥을 더한다.
 	void AddFireKick(const FValorCameraKickConfig& KickConfig);
 

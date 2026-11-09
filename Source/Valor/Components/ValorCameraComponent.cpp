@@ -105,6 +105,24 @@ void UValorCameraComponent::RefreshLocalPresentation(ACharacter* OwningCharacter
 	OwningCharacter->GetMesh()->SetOwnerNoSee(bIsLocallyControlled);
 }
 
+void UValorCameraComponent::EnterDeathView(ACharacter* OwningCharacter, USpringArmComponent* CameraBoom, float ArmLength)
+{
+	SetADSState(false, 0.0f, 0.0f);
+	CurrentViewRecoil = FRotator::ZeroRotator;
+
+	if (CameraBoom)
+	{
+		// 붐 충돌 검사를 켜서 벽 앞에서 카메라가 당겨지게 한다(시체 메시는 Camera 채널을 무시하도록 캐릭터가 설정한다).
+		CameraBoom->TargetArmLength = ArmLength;
+		CameraBoom->bDoCollisionTest = true;
+	}
+
+	if (OwningCharacter && OwningCharacter->GetMesh())
+	{
+		OwningCharacter->GetMesh()->SetOwnerNoSee(false);
+	}
+}
+
 void UValorCameraComponent::SetADSState(bool bNewADS, float ADSFieldOfView, float InterpSpeed)
 {
 	bIsADSActive = bNewADS;

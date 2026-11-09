@@ -1,5 +1,6 @@
 #include "ValorCombatAttributeSet.h"
 
+#include "AbilitySystem/ValorGameplayTags.h"
 #include "Net/UnrealNetwork.h"
 
 UValorCombatAttributeSet::UValorCombatAttributeSet()
@@ -57,20 +58,26 @@ void UValorCombatAttributeSet::PostGameplayEffectExecute(const FGameplayEffectMo
 			return;
 		}
 
-		float RemainingDamage = DamageToApply;
-		if (GetShield() > 0.0f)
-		{
-			const float NewShield = FMath::Max(0.0f, GetShield() - RemainingDamage);
-			RemainingDamage = FMath::Max(0.0f, RemainingDamage - GetShield());
-			SetShield(NewShield);
-		}
-
-		if (RemainingDamage > 0.0f)
-		{
-			SetHealth(FMath::Clamp(GetHealth() - RemainingDamage, 0.0f, GetMaxHealth()));
-		}
-
+		// 실드가 먼저 100% 흡수하고 남은 피해가 체력을 깎는다(규칙은 ValorDamage::Resolve 한 곳에만 있다).
+		FValorDamageEvent DamageEvent;
+		DamageEvent.RequestedDamage = DamageToApply;
+		DamageEvent.Resolution = ValorDamage::Resolve(GetHealth(), GetShield(), DamageToApply);
+		SetShield(DamageEvent.Resolution.NewShield);
+		SetHealth(DamageEvent.Resolution.NewHealth);
 		ClampVitalAttributes();
+
+		// 사건 정보: 사수/무기/발사 위치는 EffectContext에서, 부위/관통은 스펙의 동적 태그에서 읽는다.
+		const FGameplayEffectContextHandle& Context = Data.EffectSpec.GetEffectContext();
+		DamageEvent.Instigator = Context.GetOriginalInstigator();
+		DamageEvent.DamageCauser = Context.GetEffectCauser();
+		DamageEvent.bHasOrigin = Context.HasOrigin();
+		DamageEvent.Origin = Context.GetOrigin();
+
+		const FGameplayTagContainer& SpecTags = Data.EffectSpec.GetDynamicAssetTags();
+		DamageEvent.HitZone = ValorDamage::HitZoneFromTags(SpecTags);
+		DamageEvent.bPenetrated = SpecTags.HasTagExact(ValorGameplayTags::Damage_Penetrated);
+
+		OnDamageApplied.Broadcast(DamageEvent);
 		return;
 	}
 

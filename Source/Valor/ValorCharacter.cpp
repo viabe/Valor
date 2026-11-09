@@ -2,8 +2,11 @@
 
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
 #include "AbilitySystem/ValorAbilitySystemComponent.h"
+#include "AbilitySystem/ValorDamageTypes.h"
+#include "AbilitySystem/ValorGameplayTags.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/ValorCombatComponent.h"
 #include "Components/ValorCameraComponent.h"
 #include "Components/ValorInputRouterComponent.h"
@@ -16,6 +19,9 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Net/UnrealNetwork.h"
+#include "Player/ValorPlayerController.h"
+#include "ValorGameMode.h"
 
 AValorCharacter::AValorCharacter()
 {
@@ -97,6 +103,19 @@ void AValorCharacter::BeginPlay()
 	RefreshMovementSpeed();
 	RefreshFirstPersonPresentation();
 	InitializeAbilityActorInfo();
+
+	// 피해 결과는 서버에서만 확정되므로 서버만 구독한다(클라는 Health/bIsDead 복제로 결과만 받는다).
+	if (HasAuthority() && CombatAttributeSet)
+	{
+		CombatAttributeSet->OnDamageApplied.AddUObject(this, &AValorCharacter::HandleDamageApplied);
+	}
+}
+
+void AValorCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(AValorCharacter, bIsDead);
 }
 
 void AValorCharacter::PossessedBy(AController* NewController)
@@ -127,6 +146,11 @@ void AValorCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 void AValorCharacter::HandleMoveInput(const FVector2D& RawMoveInput)
 {
+	if (bIsDead)
+	{
+		return;
+	}
+
 	const FVector2D SanitizedMoveInput = SanitizeMoveInput(RawMoveInput);
 	ApplyMoveInput(SanitizedMoveInput);
 
@@ -154,6 +178,11 @@ void AValorCharacter::HandleLookInput(const FVector2D& RawLookInput)
 
 void AValorCharacter::HandleJumpInputPressed()
 {
+	if (bIsDead)
+	{
+		return;
+	}
+
 	const bool bCanJumpOnThisMachine = CanJump();
 	Jump();
 
@@ -194,6 +223,11 @@ void AValorCharacter::HandleJumpInputReleased()
 
 void AValorCharacter::HandleWalkInputPressed()
 {
+	if (bIsDead)
+	{
+		return;
+	}
+
 	SetWalkIntent(true);
 
 	if (!HasAuthority())
@@ -214,6 +248,11 @@ void AValorCharacter::HandleWalkInputReleased()
 
 void AValorCharacter::HandleCrouchInputPressed()
 {
+	if (bIsDead)
+	{
+		return;
+	}
+
 	SetCrouchIntent(true);
 
 	if (!HasAuthority())
@@ -328,7 +367,133 @@ void AValorCharacter::Landed(const FHitResult& Hit)
 
 bool AValorCharacter::IsAlive() const
 {
-	return CombatAttributeSet && CombatAttributeSet->GetHealth() > 0.0f;
+	return !bIsDead && CombatAttributeSet && CombatAttributeSet->GetHealth() > 0.0f;
+}
+
+void AValorCharacter::HandleDamageApplied(const FValorDamageEvent& DamageEvent)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const float AppliedDamage = DamageEvent.Resolution.HealthDamage + DamageEvent.Resolution.ShieldDamage;
+
+	// 피격자 화면: 피해가 온 방향 표시(사수 눈 위치). 비신뢰 RPC — 한 번 빠져도 다음 피격에 다시 표시되는 연출이다.
+	if (AValorPlayerController* VictimController = Cast<AValorPlayerController>(GetController()))
+	{
+		VictimController->ClientNotifyDamageTaken(DamageEvent.bHasOrigin ? DamageEvent.Origin : GetActorLocation(), AppliedDamage);
+	}
+
+	// 사수 화면: 명중 확인(부위, 처치 여부, 실제 깎인 양). 서버 판정 결과라서 클라 예측 탄흔과 달리 "진짜로 맞았다"는 신호다.
+	const APawn* InstigatorPawn = Cast<APawn>(DamageEvent.Instigator.Get());
+	if (InstigatorPawn && InstigatorPawn != this)
+	{
+		if (AValorPlayerController* ShooterController = Cast<AValorPlayerController>(InstigatorPawn->GetController()))
+		{
+			FValorHitConfirm HitConfirm;
+			HitConfirm.Damage = AppliedDamage;
+			HitConfirm.HitZone = DamageEvent.HitZone;
+			HitConfirm.bKilled = DamageEvent.Resolution.bKilled;
+			ShooterController->ClientNotifyHitConfirmed(HitConfirm);
+		}
+	}
+
+	if (DamageEvent.Resolution.bKilled)
+	{
+		Die(DamageEvent);
+	}
+}
+
+void AValorCharacter::Die(const FValorDamageEvent& KillingEvent)
+{
+	if (!HasAuthority() || bIsDead)
+	{
+		return;
+	}
+
+	bIsDead = true;
+
+	// GAS 쪽 사망 상태: 서버 로컬 태그(서버 전용 어빌리티 차단) + 복제 루즈 태그(클라 ASC도 같은 태그를 갖게 — 이후 스킬 UI/예측용).
+	// 복제 루즈 태그는 클라 쪽 카운트만 갱신하므로 서버 자신의 카운트는 로컬 태그로 따로 올린다.
+	// 태그를 먼저 붙인 뒤 어빌리티를 취소해야, 취소 콜백 중에 다시 활성화되는 경로가 없다.
+	if (AbilitySystemComponent)
+	{
+		AbilitySystemComponent->AddLooseGameplayTag(ValorGameplayTags::State_Dead);
+		AbilitySystemComponent->AddReplicatedLooseGameplayTag(ValorGameplayTags::State_Dead);
+		AbilitySystemComponent->CancelAllAbilities();
+	}
+
+	if (CombatComponent)
+	{
+		CombatComponent->HandleOwnerDeath();
+	}
+
+	// 시체는 히트스캔 대상이 아니므로 랙 보상 히트박스 기록도 멈춘다(서버 틱 비용 절감).
+	if (LagCompensationComponent)
+	{
+		LagCompensationComponent->SetComponentTickEnabled(false);
+	}
+
+	ApplyDeathPresentation();
+
+	// 킬 크레딧·킬피드·리스폰은 게임 규칙이므로 GameMode(서버에만 존재)가 정한다.
+	if (UWorld* World = GetWorld())
+	{
+		if (AValorGameMode* GameMode = World->GetAuthGameMode<AValorGameMode>())
+		{
+			GameMode->HandleCharacterKilled(this, KillingEvent);
+		}
+	}
+}
+
+void AValorCharacter::OnRep_IsDead()
+{
+	if (!bIsDead)
+	{
+		return;
+	}
+
+	if (CombatComponent)
+	{
+		CombatComponent->HandleOwnerDeath();
+	}
+
+	ApplyDeathPresentation();
+}
+
+void AValorCharacter::ApplyDeathPresentation()
+{
+	// 이동 정지: 서버와 소유 클라가 같이 끈다(소유 클라가 계속 이동을 예측하면 서버 보정이 반복된다).
+	if (UCharacterMovementComponent* MovementComponent = GetCharacterMovement())
+	{
+		MovementComponent->StopMovementImmediately();
+		MovementComponent->DisableMovement();
+	}
+
+	// 캡슐은 길을 막지 않게 끈다. 탄 판정은 원래 캡슐이 아니라 랙 보상 히트박스이고, 서버 히트스캔이 시체를 건너뛴다.
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+
+	// 래그돌은 화면이 있는 머신에서만 시뮬레이션한다(전용 서버는 그릴 화면이 없으므로 물리 비용을 쓰지 않는다).
+	// 시체가 탄/시야/카메라 트레이스를 막지 않게 해서, 클라 예측 탄흔과 사망 시점 카메라가 시체에 걸리지 않게 한다.
+	USkeletalMeshComponent* CharacterMesh = GetMesh();
+	if (GetNetMode() != NM_DedicatedServer && CharacterMesh)
+	{
+		CharacterMesh->SetCollisionProfileName(TEXT("Ragdoll"));
+		CharacterMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
+		CharacterMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		CharacterMesh->SetAllBodiesSimulatePhysics(true);
+		CharacterMesh->SetSimulatePhysics(true);
+		CharacterMesh->WakeAllRigidBodies();
+	}
+
+	if (IsLocallyControlled() && CameraLogicComponent)
+	{
+		CameraLogicComponent->EnterDeathView(this, CameraBoom, DeathCameraArmLength);
+	}
 }
 
 void AValorCharacter::ServerSetMoveInput_Implementation(FVector2D MoveInput)
@@ -344,6 +509,11 @@ void AValorCharacter::ServerSetMoveInput_Implementation(FVector2D MoveInput)
 
 void AValorCharacter::ServerSetJumpPressed_Implementation(bool bPressed)
 {
+	if (bIsDead)
+	{
+		return;
+	}
+
 	if (!CharacterStateComponent)
 	{
 		return;
@@ -369,6 +539,11 @@ void AValorCharacter::ServerSetJumpPressed_Implementation(bool bPressed)
 
 void AValorCharacter::ServerSetWalkPressed_Implementation(bool bPressed)
 {
+	if (bIsDead)
+	{
+		return;
+	}
+
 	// 걷기 상태는 서버가 최종 속도를 확정해야 원격 클라이언트와 판정 기준이 어긋나지 않는다.
 	SetWalkIntent(bPressed);
 
@@ -380,6 +555,11 @@ void AValorCharacter::ServerSetWalkPressed_Implementation(bool bPressed)
 
 void AValorCharacter::ServerSetCrouchPressed_Implementation(bool bPressed)
 {
+	if (bIsDead)
+	{
+		return;
+	}
+
 	// 앉기는 CharacterMovement의 기본 네트워크 지원을 활용하되,
 	// 입력 의도와 실제 자세 전환은 서버가 최종 판정한다.
 	if (bPressed && !CanCrouch())
