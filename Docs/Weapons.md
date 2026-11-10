@@ -24,6 +24,7 @@
 | 무기 슬롯 | 1 주무기 / 2 보조무기(권총) / 3 칼, 휠 순환, G 버리기. 교체는 소유 클라 예측 + 서버 확정 |
 | 장착 시간 | `EquipTimeSeconds`(칼 0.6초). 끝나기 전 발사·조준·재장전 불가, 서버가 발사 시각으로 검증 |
 | 이동 속도 | 칼 6.75m/s × `MoveSpeedMultiplier`(조준 중이면 ADS 배율을 곱함), 걷기 61%. 이동 예측에 실어 보냄 |
+| 1인칭 총 | 내 화면은 카메라 기준 뷰모델(힙/조준 자세, 조준기 정렬, 장착·재장전 자세, 흔들림, 사격 킥), 남의 화면은 3인칭 손. `Docs/WeaponAttachment.md` 6절 |
 
 공통으로 아직 없는 것:
 - 소음기 효과(`bSilenced`)
@@ -72,6 +73,7 @@
 | 무기 | `AirBurstDistanceCm` | 버키 캐니스터 폭발 거리(750) | **사용** |
 | 무기 | `ReloadPerRoundSeconds` | 한 발씩 장전(버키·마샬 0.5초) | 구현 예정 |
 | 무기 | `bUseSeparateAltFireRecoil` + `AltFireRecoilProfile` | 우클릭 전용 반동 규칙(클래식 우클릭, 스팅어 점사) | **사용** |
+| 무기 | `Viewmodel` | 1인칭 배치: 힙 위치·회전, 조준 거리, 조준선 높이(0 = 메시로 자동), 사격 킥 | **사용** |
 | 발사 모드 | `CrouchErrorMultiplier` | 앉기 탄퍼짐 배율. 모드별로 다르다(예: 스팅어 힙 0.85 / ADS 0.75). `MovementAccuracy`에서 옮김 | **사용** |
 | 발사 모드 | `bOverrideMovementError` + `MovementErrorOverride` | 모드 전용 이동 오차(클래식 우클릭) | **사용** |
 | 발사 모드 | `MoveSpeedMultiplier` | 이동 속도. 힙은 칼 대비, ADS는 힙 대비(우클릭이 공격인 총의 AltFire 값은 쓰지 않음) | **사용** |

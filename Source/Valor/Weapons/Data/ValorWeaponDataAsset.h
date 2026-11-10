@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "Curves/CurveFloat.h"
 #include "Engine/DataAsset.h"
+#include "Weapons/ValorViewmodelTypes.h"
 #include "ValorWeaponDataAsset.generated.h"
 
 class UAnimMontage;
@@ -432,6 +433,7 @@ struct VALOR_API FValorWeaponConfig
 	TObjectPtr<UAnimMontage> FireMontage = nullptr;
 
 	// 총기 메시 안의 그립 소켓을 손 소켓과 정렬해, 메시 피벗이 달라도 같은 장착 규칙을 유지한다.
+	// 메시에 이 소켓이 없으면 리그 공통 Root 뼈(손잡이 위치)로 대체한다(ValorViewmodel::ResolveGripReferenceName).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Attachment")
 	FName GripSocketName = TEXT("GripSocket");
 
@@ -533,6 +535,10 @@ struct VALOR_API FValorWeaponConfig
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|FX")
 	FValorWeaponFXConfig Effects;
+
+	// 1인칭(내 화면) 총 배치: 힙/조준 위치, 조준선 높이, 사격 킥. 로컬 연출 전용이라 판정과 무관하다(ValorViewmodelTypes.h).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Weapon|Viewmodel")
+	FValorViewmodelConfig Viewmodel;
 
 	// 관통 가능한 벽 두께(cm)와 관통 후 피해 배율. 발로란트는 등급(Low/Medium/High)만 공개하므로 cm·배율은 프로젝트 규칙이다
 	// (Low 20cm ×0.5 / Medium 45cm ×0.7 / High 90cm ×0.8). 현재 판정은 Low 등급이면 관통하지 않는다.

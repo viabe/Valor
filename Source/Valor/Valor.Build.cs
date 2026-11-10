@@ -27,5 +27,8 @@ public class Valor : ModuleRules
 
 		// HUD 피격 방향 표시가 반투명 삼각형을 그릴 때 쓰는 흰색 텍스처(GWhiteTexture)가 RenderCore에 있다.
 		PrivateDependencyModuleNames.Add("RenderCore");
+
+		// 1인칭 팔 투본 IK(AnimationCore::SolveTwoBoneIK). 엔진 런타임 모듈이다.
+		PrivateDependencyModuleNames.Add("AnimationCore");
 	}
 }

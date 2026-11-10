@@ -21,6 +21,7 @@ class UValorCharacterStateComponent;
 class UValorCombatComponent;
 class UValorInputRouterComponent;
 class UValorLagCompensationComponent;
+class UValorViewmodelComponent;
 struct FValorDamageEvent;
 
 UCLASS(config=Game)
@@ -36,6 +37,10 @@ private:
 	// 실제 플레이어 시점을 제공하는 1인칭 카메라다.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
+
+	// 1인칭 뷰모델 피벗(카메라 자식). 로컬 플레이어 화면에서만 총·칼이 여기에 붙고, 다른 머신에서는 3인칭 손에 붙는다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
+	UValorViewmodelComponent* ViewmodelComponent;
 
 	// 기존 블루프린트 자산과 호환되도록 Character가 입력 자산을 직접 소유한다.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
@@ -106,6 +111,11 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Weapon", meta = (AllowPrivateAccess = "true"))
 	FName WeaponAttachSocketName = TEXT("hand_r_socket");
 
+	// 3인칭 손 소켓 공간에서 총의 회전(총 리그 축 → 손 소켓 축). 기본값은 마네킹 소총 자세에서 잰 값이다(생성자 설명 참고).
+	// 다른 스켈레톤이나 자세로 바꿔 총 방향이 틀어지면 이 값만 고치면 된다(총마다 고칠 필요 없음).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Valor|Weapon", meta = (AllowPrivateAccess = "true"))
+	FRotator ThirdPersonWeaponRotation = FRotator::ZeroRotator;
+
 	// 이동 속도(달리기·걷기·앉기 비율, 무기·조준 배율)는 UValorCharacterMovementComponent가 이동 예측과 함께 계산한다.
 
 	// 캐릭터별 애니메이션 오버라이드 계층이 공통 AnimInstance 위에서 분기할 수 있도록 남겨둔 프로필 이름이다.
@@ -175,13 +185,22 @@ public:
 	// IValorWeaponOwnerInterface
 	virtual USceneComponent* GetWeaponAttachComponent() const override;
 	virtual FName GetWeaponAttachSocketName() const override;
+	virtual USceneComponent* GetFirstPersonWeaponAttachComponent() const override;
+	virtual FQuat GetThirdPersonWeaponRotation() const override { return ThirdPersonWeaponRotation.Quaternion(); }
 	virtual void GetWeaponViewPoint(FVector& OutLocation, FRotator& OutRotation) const override;
+
+	// 조준 방향(3인칭 상체 조준·총 정렬이 쓴다). 컨트롤러가 있으면 컨트롤 회전, 없으면(다른 플레이어 화면) 액터 요 + 복제 피치.
+	virtual FRotator GetBaseAimRotation() const override;
 
 	// IAbilitySystemInterface
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 	FORCEINLINE USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	FORCEINLINE UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+	FORCEINLINE UValorViewmodelComponent* GetViewmodelComponent() const { return ViewmodelComponent; }
+
+	// 이 머신의 로컬 플레이어가 보는 살아 있는 캐릭터인가(1인칭 뷰모델을 쓸지). AI 컨트롤러는 로컬이어도 화면이 없으므로 제외한다.
+	bool IsLocalPlayerView() const;
 	FORCEINLINE UValorCharacterStateComponent* GetCharacterStateComponent() const { return CharacterStateComponent; }
 	FORCEINLINE UValorCameraComponent* GetCameraLogicComponent() const { return CameraLogicComponent; }
 	FORCEINLINE UValorCombatComponent* GetCombatComponent() const { return CombatComponent; }

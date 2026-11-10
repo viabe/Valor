@@ -109,6 +109,10 @@ public:
 	// bMakeActive = 바로 꺼내 든다. bInstantEquip = 장착 시간 없이 바로 쏠 수 있다(스폰 지급용).
 	void GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass, bool bMakeActive = true, bool bInstantEquip = false);
 
+	// 이 머신에서 인벤토리(총 두 칸 + 칼)를 시점에 맞게 다시 붙인다(로컬 플레이어 = 1인칭 뷰모델, 그 외 = 3인칭 손).
+	// 캐릭터가 빙의·컨트롤러 복제 때 호출한다. 부착은 복제되지 않는 머신별 연출이다.
+	void RefreshEquipmentViewAttachment();
+
 	// 지금 든 총. 칼을 들고 있거나 빈 손이면 nullptr. 소유 클라는 교체 예측이 반영된 값이다.
 	UFUNCTION(BlueprintPure, Category="Valor|Combat")
 	AValorWeaponBase* GetEquippedWeapon() const { return EquippedWeapon; }

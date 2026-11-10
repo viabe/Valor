@@ -9,6 +9,7 @@
 #include "AbilitySystem/ValorGameplayTags.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/ValorCameraComponent.h"
+#include "Components/ValorViewmodelComponent.h"
 #include "Components/ValorCharacterMovementComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
 #include "Engine/World.h"
@@ -796,6 +797,13 @@ void UValorCombatComponent::PlayLocalShotPresentation(const FValorShotEffects& S
 		{
 			CameraLogicComponent->AddFireKick(EquippedWeapon->GetCameraKickConfig(ShotEffects.bAltMode));
 		}
+
+		// 1인칭 총 자체의 킥(뒤로 밀림 + 총구 들림). 우클릭이 공격인 총(클래식·버키)의 우클릭은 조준이 아니므로 힙 킥을 쓴다.
+		if (UValorViewmodelComponent* ViewmodelComponent = OwnerCharacter->GetViewmodelComponent())
+		{
+			const bool bWasAimedShot = ShotEffects.bAltMode && EquippedWeapon->GetMaxZoomLevel() > 0;
+			ViewmodelComponent->AddFireKick(EquippedWeapon->GetViewmodelConfig(), bWasAimedShot);
+		}
 	}
 }
 
@@ -1047,6 +1055,28 @@ void UValorCombatComponent::MulticastPlayReloadCue_Implementation()
 	}
 
 	// 이후 애니메이션 몽타주와 사운드를 붙일 수 있도록 리로드 Cue만 열어둔다.
+}
+
+void UValorCombatComponent::RefreshEquipmentViewAttachment()
+{
+	CacheOwnerCharacter();
+	if (!OwnerCharacter)
+	{
+		return;
+	}
+
+	for (AValorWeaponBase* SlotWeapon : {PrimaryWeapon.Get(), SecondaryWeapon.Get()})
+	{
+		if (IsValid(SlotWeapon))
+		{
+			SlotWeapon->RefreshViewAttachment(OwnerCharacter);
+		}
+	}
+
+	if (IsValid(MeleeWeapon))
+	{
+		MeleeWeapon->RefreshViewAttachment(OwnerCharacter);
+	}
 }
 
 void UValorCombatComponent::OnRep_PrimaryWeapon(AValorWeaponBase* PreviousWeapon)

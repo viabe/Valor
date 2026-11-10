@@ -12,6 +12,7 @@
 #include "Components/ValorCameraComponent.h"
 #include "Components/ValorInputRouterComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
+#include "Components/ValorViewmodelComponent.h"
 #include "EnhancedActionKeyMapping.h"
 #include "EnhancedInputComponent.h"
 #include "InputAction.h"
@@ -71,6 +72,19 @@ AValorCharacter::AValorCharacter(const FObjectInitializer& ObjectInitializer)
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
+
+	// 3인칭 총 방향 보정. 마네킹 소총 대기 자세(조준 피치 0)에서 hand_r_socket 축을 캐릭터 기준으로 잰 값
+	// (2026-11-09, ViewmodelCapture 도구, 총 5종 평균): 소켓 X는 거의 뒤(약간 오른쪽·위), Z는 거의 위(약간 앞·왼쪽).
+	// 그 자세에서 총은 리그 Z(총구) = 앞, 리그 X(총의 왼쪽) = 왼쪽이어야 하므로 보정 = 소켓 회전의 역 x 원하는 총 회전.
+	// 축을 반올림해(소켓 X = 정확히 뒤) 쓰면 총구가 약 6도 아래, 10도 왼쪽으로 기운다. 남는 차이(조준 피치, 눈과 총의 높이 차)는
+	// 무기의 3인칭 조준 정렬(AValorWeaponBase::UpdateThirdPersonAim)이 매 프레임 맞춘다.
+	const FQuat MeasuredHandSocket = FRotationMatrix::MakeFromXZ(FVector(-0.969f, 0.207f, 0.133f), FVector(0.103f, -0.151f, 0.983f)).ToQuat();
+	const FQuat DesiredWeaponRig = FRotationMatrix::MakeFromXZ(FVector(0.0f, -1.0f, 0.0f), FVector(1.0f, 0.0f, 0.0f)).ToQuat();
+	ThirdPersonWeaponRotation = (MeasuredHandSocket.Inverse() * DesiredWeaponRig).Rotator();
+
+	// 카메라의 자식이라 시선·카메라 반동 연출을 그대로 따라가고, 그 위에 총 자체의 흔들림·킥을 더한다.
+	ViewmodelComponent = CreateDefaultSubobject<UValorViewmodelComponent>(TEXT("ViewmodelComponent"));
+	ViewmodelComponent->SetupAttachment(FollowCamera);
 
 	CharacterStateComponent = CreateDefaultSubobject<UValorCharacterStateComponent>(TEXT("CharacterStateComponent"));
 	CameraLogicComponent = CreateDefaultSubobject<UValorCameraComponent>(TEXT("CameraLogicComponent"));
@@ -360,6 +374,33 @@ FName AValorCharacter::GetWeaponAttachSocketName() const
 	return WeaponAttachSocketName;
 }
 
+USceneComponent* AValorCharacter::GetFirstPersonWeaponAttachComponent() const
+{
+	return IsLocalPlayerView() ? ViewmodelComponent : nullptr;
+}
+
+bool AValorCharacter::IsLocalPlayerView() const
+{
+	// 컨트롤러는 소유 클라에만 복제되므로, 다른 플레이어의 캐릭터에서는 항상 false다. 리슨 호스트도 자기 캐릭터만 true.
+	const APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	return PlayerController && PlayerController->IsLocalController() && !bIsDead;
+}
+
+FRotator AValorCharacter::GetBaseAimRotation() const
+{
+	// 엔진 기본 구현은 컨트롤러가 있으면 PlayerController::GetPlayerViewPoint(카메라 캐시)를 쓴다.
+	// 서버에서 원격 플레이어의 카메라 캐시는 클라가 "움직일 때만" 보내는 카메라 갱신으로 채워진다(PlayerController.cpp).
+	// 그래서 제자리에 서서 마우스로만 돌면 갱신되지 않아, 리슨 호스트 화면에서 그 플레이어의 상체·총 조준이 예전 방향에 멈춘다.
+	// 컨트롤 회전은 매 이동 패킷(ServerMove)에 실려 오므로 서버에서도 최신이다. 로컬 플레이어도 같은 값(카메라 연출 킥 제외)이다.
+	// 컨트롤러가 없는 머신(다른 클라의 시뮬레이티드 프록시)은 기본 구현(액터 요 + 복제된 피치)을 그대로 쓴다.
+	if (const AController* CurrentController = GetController())
+	{
+		return CurrentController->GetControlRotation();
+	}
+
+	return Super::GetBaseAimRotation();
+}
+
 void AValorCharacter::GetWeaponViewPoint(FVector& OutLocation, FRotator& OutRotation) const
 {
 	if (FollowCamera)
@@ -520,6 +561,13 @@ void AValorCharacter::ApplyDeathPresentation()
 	{
 		CameraLogicComponent->EnterDeathView(this, CameraBoom, DeathCameraArmLength);
 	}
+
+	// 사망 시점은 3인칭이라 카메라에 붙은 1인칭 총을 숨긴다. 총은 서버가 곧 떨어뜨리거나 없애므로 다시 붙이지 않는다.
+	if (ViewmodelComponent && ViewmodelComponent->IsFirstPersonActive())
+	{
+		ViewmodelComponent->SetFirstPersonActive(false);
+		ViewmodelComponent->SetVisibility(false, true);
+	}
 }
 
 void AValorCharacter::ServerSetMoveInput_Implementation(FVector2D MoveInput)
@@ -631,6 +679,17 @@ void AValorCharacter::RefreshFirstPersonPresentation()
 	if (CameraLogicComponent)
 	{
 		CameraLogicComponent->RefreshLocalPresentation(this, IsLocallyControlled());
+	}
+
+	// 로컬 조종 여부가 확정되는 시점(빙의·컨트롤러 복제)이다. 총이 그보다 먼저 복제돼 3인칭 손에 붙었을 수 있으므로 다시 붙인다.
+	if (ViewmodelComponent)
+	{
+		ViewmodelComponent->SetFirstPersonActive(IsLocalPlayerView());
+	}
+
+	if (CombatComponent)
+	{
+		CombatComponent->RefreshEquipmentViewAttachment();
 	}
 }
 

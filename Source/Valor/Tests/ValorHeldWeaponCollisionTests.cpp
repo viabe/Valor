@@ -1,11 +1,8 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "GameFramework/Actor.h"
-#include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
-#include "Misc/Paths.h"
+#include "Tests/ValorTestWorld.h"
 #include "Weapons/ValorInventoryTypes.h"
 #include "Weapons/ValorWeaponBase.h"
 
@@ -18,36 +15,6 @@
 
 namespace
 {
-	// 테스트 전용 임시 게임 월드. 액터 초기화(InitializeActorsForPlay)를 해야 SpawnActor가 PostInitializeComponents를 호출한다.
-	struct FValorScopedTestWorld
-	{
-		UWorld* World = nullptr;
-
-		FValorScopedTestWorld()
-		{
-			World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("ValorHeldWeaponCollisionTestWorld"));
-			if (World && GEngine)
-			{
-				FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
-				WorldContext.SetCurrentWorld(World);
-				World->InitializeActorsForPlay(FURL());
-			}
-		}
-
-		~FValorScopedTestWorld()
-		{
-			if (World)
-			{
-				if (GEngine)
-				{
-					GEngine->DestroyWorldContext(World);
-				}
-
-				World->DestroyWorld(false);
-			}
-		}
-	};
-
 	// 충돌이 켜진 프리미티브 컴포넌트 이름 목록(비어 있으면 통과).
 	TArray<FString> FindCollidingComponents(const AActor& Actor)
 	{
@@ -100,26 +67,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FValorHeldWeaponCollisionBlueprintsTest, "Valor
 bool FValorHeldWeaponCollisionBlueprintsTest::RunTest(const FString& Parameters)
 {
 	// /Game/Valor/Gun의 총 BP를 모두 실제로 생성해 본다. 새 총 BP에 부품 메시를 추가해도 이 테스트가 같은 문제를 잡는다.
-	TArray<FString> AssetFiles;
-	IFileManager::Get().FindFiles(AssetFiles, *(FPaths::ProjectContentDir() / TEXT("Valor/Gun/BP_*.uasset")), true, false);
-
-	FValorScopedTestWorld TestWorld;
+	FValorScopedTestWorld TestWorld(TEXT("ValorHeldWeaponCollisionTestWorld"));
 	if (!TestNotNull(TEXT("테스트 월드 생성"), TestWorld.World))
 	{
 		return false;
 	}
 
 	int32 CheckedWeaponCount = 0;
-	for (const FString& AssetFile : AssetFiles)
+	for (const TPair<FString, UClass*>& GunClass : LoadValorGunBlueprintClasses())
 	{
-		const FString AssetName = FPaths::GetBaseFilename(AssetFile);
-		const FString ClassPath = FString::Printf(TEXT("/Game/Valor/Gun/%s.%s_C"), *AssetName, *AssetName);
-		UClass* LoadedClass = LoadObject<UClass>(nullptr, *ClassPath);
-		if (!LoadedClass || !LoadedClass->IsChildOf(AValorWeaponBase::StaticClass()))
-		{
-			// 줍기 BP 등 총이 아닌 BP는 건너뛴다.
-			continue;
-		}
+		const FString& AssetName = GunClass.Key;
+		UClass* LoadedClass = GunClass.Value;
 
 		FActorSpawnParameters SpawnParameters;
 		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;

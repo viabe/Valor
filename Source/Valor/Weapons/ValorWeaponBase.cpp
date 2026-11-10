@@ -4,6 +4,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
+#include "Engine/SkeletalMesh.h"
 #include "HAL/IConsoleManager.h"
 #include "Interfaces/ValorWeaponOwnerInterface.h"
 #include "Kismet/GameplayStatics.h"
@@ -70,7 +71,11 @@ namespace
 
 AValorWeaponBase::AValorWeaponBase()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// Tick은 3인칭 조준 정렬에만 쓴다(원격 캐릭터를 그리는 머신에서 손에 든 총만 켬). 애니메이션이 손 위치를 확정한 뒤에
+	// 돌려야 하므로 프레임 마지막 단계(PostUpdateWork)에서 실행한다.
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
+	PrimaryActorTick.TickGroup = TG_PostUpdateWork;
 	bReplicates = true;
 	bNetUseOwnerRelevancy = true;
 
@@ -95,6 +100,21 @@ void AValorWeaponBase::PostInitializeComponents()
 	// 생성자의 WeaponMesh 설정만으로는 부족하다: BP에서 추가한 부품 메시(오퍼레이터 등)는 기본 충돌이 켜진 채 생성된다.
 	// 서버·클라 모두 액터 생성 시 한 번 실행되고, 이후 충돌을 다시 켜는 코드는 없다.
 	ValorInventory::DisableHeldWeaponCollision(*this);
+
+	// BP에서 액터 루트에 직접 붙인 부품(오퍼레이터 조준경 등)을 총 메시의 자식으로 옮긴다.
+	// 왜: 장착 때 총 메시만 손잡이 기준으로 다시 정렬하므로(RefreshWeaponMeshAlignment), 루트에 붙은 부품은 제자리에 남아 총과 떨어진다.
+	// 지금(정렬 전)은 BP 뷰포트에서 배치한 그대로이므로, 월드 변환을 유지한 채 옮기면 "총 메시 기준 상대 배치"가 BP와 같아진다.
+	if (Root && WeaponMesh)
+	{
+		const TArray<TObjectPtr<USceneComponent>> RootChildren = Root->GetAttachChildren();
+		for (USceneComponent* Child : RootChildren)
+		{
+			if (Child && Child != WeaponMesh && Child->GetOwner() == this)
+			{
+				Child->AttachToComponent(WeaponMesh, FAttachmentTransformRules::KeepWorldTransform);
+			}
+		}
+	}
 }
 
 void AValorWeaponBase::BeginPlay()
@@ -131,31 +151,164 @@ void AValorWeaponBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 	DOREPLIFETIME_CONDITION(AValorWeaponBase, ServerShotCount, COND_OwnerOnly);
 }
 
+void AValorWeaponBase::PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker)
+{
+	Super::PreReplication(ChangedPropertyTracker);
+
+	// 손에 든 총은 머신마다 다른 곳에 붙는다(내 화면 = 1인칭 피벗, 남의 화면 = 3인칭 손). 각 머신이 장착 OnRep에서 직접 붙인다.
+	// 엔진 기본값대로 서버의 부착을 복제하면, 도착하는 순간 클라의 OnRep_AttachmentReplication이 로컬 부착을 덮어쓴다.
+	//  - 소유 클라: 내 1인칭 총이 숨겨진 3인칭 손으로 끌려가 화면에서 사라진다(도착 순서에 따라 될 때도 안 될 때도 있다).
+	//  - 리슨 호스트의 총: 호스트 화면의 1인칭 피벗 부착이 다른 클라로 가서, 그 화면에서는 총이 손이 아니라 머리 앞에 붙는다.
+	// 버린 총은 이 액터가 아니라 별도 픽업 액터가 되므로(이 액터는 파괴) 분리 상태를 복제할 필요도 없다.
+	DOREPLIFETIME_ACTIVE_OVERRIDE_FAST(AActor, AttachmentReplication, false);
+}
+
 void AValorWeaponBase::OnEquippedBy(AValorCharacter* NewOwnerCharacter)
 {
 	OwningCharacter = NewOwnerCharacter;
 	SetOwner(NewOwnerCharacter);
 	SetInstigator(NewOwnerCharacter);
 
-	if (!NewOwnerCharacter)
+	RefreshViewAttachment(NewOwnerCharacter);
+}
+
+void AValorWeaponBase::RefreshViewAttachment(AValorCharacter* InViewOwnerCharacter)
+{
+	if (!InViewOwnerCharacter)
 	{
 		return;
 	}
 
-	if (IValorWeaponOwnerInterface* WeaponOwner = Cast<IValorWeaponOwnerInterface>(NewOwnerCharacter))
+	// 부착점(1인칭 피벗 또는 3인칭 손 소켓)은 액터 루트 기준점으로만 쓰고, 실제 총 위치는 무기 메시의 손잡이 기준점을 역정렬해 맞춘다.
+	// 두 부착점 모두 "손잡이 = 부착점"이라는 같은 규칙이라 정렬 코드는 하나다.
+	ViewOwnerCharacter = InViewOwnerCharacter;
+	bFirstPersonView = ValorViewmodel::AttachHeldItemToOwnerView(*this, InViewOwnerCharacter);
+	RefreshWeaponMeshAlignment();
+	RefreshThirdPersonAimTick();
+}
+
+void AValorWeaponBase::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	UpdateThirdPersonAim(DeltaSeconds);
+}
+
+void AValorWeaponBase::RefreshThirdPersonAimTick()
+{
+	// 화면이 없는 데디케이티드 서버, 1인칭(내 화면), 집어넣은 총은 정렬할 필요가 없다.
+	const bool bShouldAlign = ViewOwnerCharacter.IsValid() && !bFirstPersonView && !bHolstered && GetNetMode() != NM_DedicatedServer;
+	if (IsActorTickEnabled() != bShouldAlign)
 	{
-		if (USceneComponent* AttachComponent = WeaponOwner->GetWeaponAttachComponent())
+		SetActorTickEnabled(bShouldAlign);
+	}
+}
+
+void AValorWeaponBase::UpdateThirdPersonAim(float DeltaSeconds)
+{
+	AValorCharacter* AimingCharacter = ViewOwnerCharacter.Get();
+	USceneComponent* ItemRoot = GetRootComponent();
+	USceneComponent* HandComponent = ItemRoot ? ItemRoot->GetAttachParent() : nullptr;
+	UWorld* World = GetWorld();
+	if (!AimingCharacter || !HandComponent || !World)
+	{
+		return;
+	}
+
+	// 보정 전 총 방향 = 손 소켓(이번 프레임 애니메이션 결과) x 손 -> 총 리그 기본 회전.
+	const FQuat HandRotation = HandComponent->GetSocketQuaternion(ItemRoot->GetAttachSocketName());
+	const FQuat BaseRotation = HandRotation * AimingCharacter->GetThirdPersonWeaponRotation();
+	const FVector MuzzleDirection = BaseRotation.RotateVector(FVector::UpVector);
+
+	// 조준점: 그 캐릭터의 눈에서 조준 방향(원격 캐릭터는 복제된 피치)으로 처음 닿는 지점.
+	// 캐릭터 메시는 Visibility를 무시하므로 월드(Visibility)와 캐릭터(Pawn 오브젝트) 두 번 쏘고 가까운 쪽을 쓴다.
+	const FVector EyeLocation = AimingCharacter->GetPawnViewLocation();
+	const FRotator AimRotation = AimingCharacter->GetBaseAimRotation();
+	const FVector AimDirection = AimRotation.Vector();
+	constexpr float MaxAimDistance = 5000.0f;
+	constexpr float MinAimDistance = 150.0f;
+	const FVector TraceEnd = EyeLocation + (AimDirection * MaxAimDistance);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ValorThirdPersonAim), false, AimingCharacter);
+	QueryParams.AddIgnoredActor(this);
+
+	float TargetDistance = MaxAimDistance;
+	FVector TargetEyeOffset = FVector::ZeroVector;
+	FHitResult Hit;
+	if (World->LineTraceSingleByChannel(Hit, EyeLocation, TraceEnd, ECC_Visibility, QueryParams))
+	{
+		TargetDistance = Hit.Distance;
+	}
+	if (World->LineTraceSingleByObjectType(Hit, EyeLocation, TraceEnd, FCollisionObjectQueryParams(ECC_Pawn), QueryParams) && Hit.Distance < TargetDistance)
+	{
+		// 캐릭터에 맞으면 캡슐 앞면이 아니라 그 캐릭터 눈(카메라 위치)의 깊이에서 총구 선이 시선과 만나게 한다.
+		// 앞면(약 35cm 앞)에서 만나면 총구 선이 그 뒤로 계속 벌어져, 겨눠진 사람의 눈 위치에서는 위·옆으로 몇 cm 비켜 간다.
+		const APawn* HitPawn = Cast<APawn>(Hit.GetActor());
+		if (HitPawn)
 		{
-			// 캐릭터 손 소켓은 액터 루트 기준점으로만 사용하고, 실제 총 위치는 무기 메시의 그립 소켓을 역정렬해 맞춘다.
-			AttachToComponent(AttachComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale, WeaponOwner->GetWeaponAttachSocketName());
-			RefreshWeaponMeshAlignment();
+			const FVector TargetEye = HitPawn->GetPawnViewLocation();
+			const float EyeDepth = (TargetEye - EyeLocation) | AimDirection;
+			TargetDistance = FMath::Max(Hit.Distance, EyeDepth);
+
+			// 머리를 겨누면 총구를 그 사람의 눈으로 모은다. 3인칭 머리 메시(보이는 머리 중심)는 카메라 위치보다 약 22cm 앞·위에 있어,
+			// 보이는 머리를 정확히 겨눈 시선도 겨눠진 사람의 눈을 약 10cm 비켜 간다(3m에서 약 2도, 네트워크 도구로 잼).
+			// 시선이 눈에서 20cm 안(머리 전체)을 지나면 완전히, 35cm에서 0이 되도록 눈 쪽으로 옮긴다. 가슴(40cm 이상)은 건드리지 않는다.
+			// 제3자 화면에서는 머리 크기 안의 차이라 티가 나지 않는다.
+			const FVector OffsetToEye = TargetEye - (EyeLocation + (AimDirection * EyeDepth));
+			TargetEyeOffset = OffsetToEye * (1.0f - FMath::SmoothStep(20.0f, 35.0f, static_cast<float>(OffsetToEye.Size())));
+		}
+		else
+		{
+			TargetDistance = Hit.Distance;
 		}
 	}
+
+	ThirdPersonAimDistance = FMath::FInterpTo(ThirdPersonAimDistance, FMath::Max(TargetDistance, MinAimDistance), DeltaSeconds, 10.0f);
+	ThirdPersonAimEyeOffset = FMath::VInterpTo(ThirdPersonAimEyeOffset, TargetEyeOffset, DeltaSeconds, 10.0f);
+	const FVector AimPoint = EyeLocation + (AimDirection * ThirdPersonAimDistance) + ThirdPersonAimEyeOffset;
+	const FVector DesiredDirection = (AimPoint - ItemRoot->GetComponentLocation()).GetSafeNormal();
+	if (DesiredDirection.IsNearlyZero())
+	{
+		return;
+	}
+
+	// 목표 회전: 총구 = 조준점 방향, 총의 위 = 시선의 위. 손잡이를 축으로 돌린다.
+	// 손 자세의 좌우 기울임(cant)까지 없앤다. 총구만 맞추고 기울임을 남기면, 정면에서 본 총 단면이 비스듬해 다른 곳을 겨누는 것처럼 보인다.
+	const FQuat AlignedRotation = ValorViewmodel::MakeLevelRigRotation(DesiredDirection, FRotationMatrix(AimRotation).GetUnitAxis(EAxis::Z));
+
+	// 손 자세의 총구가 조준점에서 20도 안이면 완전히 맞추고, 40도에서 손 자세 그대로가 되도록 줄인다(재장전·장착 동작 중).
+	const float CorrectionDegrees = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(MuzzleDirection | DesiredDirection, -1.0f, 1.0f)));
+	const float Weight = 1.0f - FMath::SmoothStep(20.0f, 40.0f, CorrectionDegrees);
+	const FQuat WorldRotation = FQuat::Slerp(BaseRotation, AlignedRotation, Weight);
+
+	ItemRoot->SetRelativeRotation(HandRotation.Inverse() * WorldRotation);
+}
+
+float AValorWeaponBase::GetViewmodelSightHeightCm() const
+{
+	if (CachedSightHeightCm < 0.0f)
+	{
+		float TopAboveGripCm = 0.0f;
+		const USkeletalMesh* SkeletalMesh = WeaponMesh ? WeaponMesh->GetSkeletalMeshAsset() : nullptr;
+		if (SkeletalMesh)
+		{
+			const FName GripReferenceName = ValorViewmodel::ResolveGripReferenceName(*WeaponMesh, GetWeaponConfig().GripSocketName);
+			// 참조 자세 기준(애니메이션 없음). 메시 상대 변환에 영향받지 않도록 컴포넌트 공간 값끼리 계산한다.
+			const FTransform GripTransform = GripReferenceName.IsNone() ? FTransform::Identity : WeaponMesh->GetSocketTransform(GripReferenceName, RTS_Component);
+			TopAboveGripCm = ValorViewmodel::ComputeTopAboveGripCm(SkeletalMesh->GetBounds().GetBox(), GripTransform);
+		}
+
+		CachedSightHeightCm = ValorViewmodel::ResolveSightHeightCm(GetViewmodelConfig(), TopAboveGripCm);
+	}
+
+	return CachedSightHeightCm;
 }
 
 void AValorWeaponBase::OnUnequipped()
 {
 	bHolstered = false;
+	bFirstPersonView = false;
+	ViewOwnerCharacter.Reset();
+	RefreshThirdPersonAimTick();
 	SetScopedViewHidden(false);
 
 	if (WeaponMesh)
@@ -164,6 +317,8 @@ void AValorWeaponBase::OnUnequipped()
 	}
 
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	// 1인칭 피벗의 축소 배율을 물려받았을 수 있으므로 원래 크기로 되돌린다.
+	SetActorScale3D(FVector::OneVector);
 	OwningCharacter = nullptr;
 	SetOwner(nullptr);
 	SetInstigator(nullptr);
@@ -526,6 +681,7 @@ void AValorWeaponBase::SetHolstered(bool bNewHolstered)
 {
 	bHolstered = bNewHolstered;
 	RefreshMeshVisibility();
+	RefreshThirdPersonAimTick();
 }
 
 void AValorWeaponBase::RefreshMeshVisibility()
@@ -647,8 +803,9 @@ void AValorWeaponBase::RefreshWeaponMeshAlignment()
 
 	WeaponMesh->SetRelativeTransform(FTransform::Identity);
 
-	const FName GripSocketName = GetWeaponConfig().GripSocketName;
-	if (GripSocketName.IsNone() || !WeaponMesh->DoesSocketExist(GripSocketName))
+	// GripSocket이 없는 총(밴달 외 13종)은 리그 공통 Root 뼈로 맞춘다. 축 규칙이 같아 밴달과 같은 방향으로 잡힌다.
+	const FName GripSocketName = ValorViewmodel::ResolveGripReferenceName(*WeaponMesh, GetWeaponConfig().GripSocketName);
+	if (GripSocketName.IsNone())
 	{
 		return;
 	}

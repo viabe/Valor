@@ -39,12 +39,26 @@ public:
 	// 블루프린트 컴포넌트까지 만들어진 뒤 무기 충돌을 모두 끈다(ValorInventory::DisableHeldWeaponCollision 참고).
 	virtual void PostInitializeComponents() override;
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	// 서버의 부착 상태(AttachmentReplication)를 복제하지 않는다. 부착은 머신마다 다르다(ValorViewmodel::AttachHeldItemToOwnerView).
+	virtual void PreReplication(IRepChangedPropertyTracker& ChangedPropertyTracker) override;
 
 	void OnEquippedBy(AValorCharacter* NewOwnerCharacter);
 	void OnUnequipped();
 
+	// 이 머신에서 소유자 시점에 맞게 다시 붙인다(로컬 플레이어 = 1인칭 뷰모델, 그 외 = 3인칭 손).
+	// 로컬 조종 여부는 컨트롤러 복제 뒤에야 확정되므로, 캐릭터가 빙의·컨트롤러 복제 때 다시 부른다.
+	void RefreshViewAttachment(AValorCharacter* InViewOwnerCharacter);
+
+	// 이 머신에서 1인칭 뷰모델로 보이는 중인가(로컬 연출 전용).
+	bool IsInFirstPersonView() const { return bFirstPersonView; }
+
 	const FValorWeaponConfig& GetWeaponConfig() const;
+
+	// 1인칭 배치(데이터 에셋 Viewmodel)와 조준선 높이(cm). 조준선 높이는 설정이 0이면 메시 크기로 한 번 계산해 둔다.
+	const FValorViewmodelConfig& GetViewmodelConfig() const { return GetWeaponConfig().Viewmodel; }
+	float GetViewmodelSightHeightCm() const;
 
 	// === 슬롯 / 장착 / 이동 속도 ===
 
@@ -221,8 +235,30 @@ private:
 	// 메시 가시성 = 손에 들고 있고(집어넣지 않음) 조준경 화면이 아님.
 	void RefreshMeshVisibility();
 
+	// 3인칭 조준 정렬(남이 보는 총의 총구를 그 캐릭터의 실제 조준점으로 돌림). 원격 캐릭터를 그리는 머신에서만 매 프레임 실행한다.
+	// 왜: 3인칭 총 방향은 애니메이션 손 자세가 정한다. 그런데 손 자세는 조준 피치(복제 시 1.4도 단위)와 정확히 맞지 않고,
+	//   총은 눈보다 약 40cm 아래(가슴 앞)에 있어 시선과 평행해도 머리를 겨눈 총이 머리 아래를 가리킨다.
+	//   손잡이를 축으로 총만 살짝 돌려 총구가 시선이 닿는 지점을 향하게 한다. 판정과 무관한 연출이다.
+	// 트레이드오프: 총이 손바닥 안에서 몇 도 돌아간다(왼손 IK가 생기면 왼손이 총을 따라간다).
+	//   재장전처럼 자세가 조준과 크게 다를 때는 보정을 서서히 끈다(억지로 돌리면 더 어색하다).
+	void UpdateThirdPersonAim(float DeltaSeconds);
+	void RefreshThirdPersonAimTick();
+
 	bool bHolstered = false;
 	bool bScopeViewHidden = false;
+	bool bFirstPersonView = false;
+
+	// 지금 이 머신에서 붙어 있는 캐릭터(부착 기준). OwningCharacter는 복제가 늦을 수 있어 부착 때 받은 값을 따로 둔다.
+	TWeakObjectPtr<AValorCharacter> ViewOwnerCharacter;
+
+	// 3인칭 조준 정렬의 수렴 거리(cm). 시선 트레이스 결과를 부드럽게 따라간다.
+	float ThirdPersonAimDistance = 2000.0f;
+
+	// 머리를 겨눌 때 조준점을 겨눠진 사람의 눈으로 옮기는 양(월드, 부드럽게 보간).
+	FVector ThirdPersonAimEyeOffset = FVector::ZeroVector;
+
+	// 자동 조준선 높이 계산 결과(음수 = 아직 계산 안 함). 메시가 바뀌지 않으므로 한 번만 계산한다.
+	mutable float CachedSightHeightCm = -1.0f;
 
 	// 반동/탄퍼짐 스프레이 상태(서버 = 권위, 소유 클라 = 예측). 복제하지 않는다.
 	FValorSprayState SprayState;
