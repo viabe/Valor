@@ -18,6 +18,8 @@
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
 #include "ValorCharacter.h"
+#include "ValorGameState.h"
+#include "ValorMatchTypes.h"
 #include "Weapons/ValorMeleeWeapon.h"
 #include "Weapons/ValorWeaponBase.h"
 #include "World/ValorWeaponPickup.h"
@@ -336,7 +338,8 @@ void UValorCombatComponent::TryFireLocalShot()
 	World->GetTimerManager().ClearTimer(LocalFireTimerHandle);
 
 	// 예약된 다음 발(연사·점사·탭 버퍼)이 사망 뒤에 불려도 쏘지 않는다. 서버도 State.Dead 태그로 따로 거부한다.
-	if (!OwnerCharacter->IsAlive())
+	// 경기 단계가 막으면(경기 종료, 설정에 따라 구매 단계) 쏘지 않는다(서버도 같은 GameState 값으로 거부한다).
+	if (!OwnerCharacter->IsAlive() || !IsFireAllowedByMatch())
 	{
 		bFireShotBuffered = false;
 		return;
@@ -642,7 +645,8 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 
 void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin)
 {
-	if (!Target || !Target->IsAlive() || !AbilitySystemComponent || !EquippedWeapon || PendingDamage.Damage <= 0.0f)
+	// 아군 피해는 판정 단계에서 이미 빠지지만, 피해를 실제로 주는 마지막 관문에서도 막는다.
+	if (!Target || !Target->IsAlive() || !AbilitySystemComponent || !EquippedWeapon || PendingDamage.Damage <= 0.0f || ValorTeams::AreAllies(OwnerCharacter, Target))
 	{
 		return;
 	}
@@ -691,6 +695,12 @@ bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
 	}
 
 	const double ServerNow = World->GetTimeSeconds();
+
+	if (!IsFireAllowedByMatch())
+	{
+		RejectShot(TEXT("경기 단계상 사격 불가"), false);
+		return false;
+	}
 
 	// 직전 승인 발이 정한 "다음 발까지 최소 간격"(점사 간격/점사 사이 대기/오딘 가속 반영). 클라도 같은 값으로 발사를 예약한다.
 	const double FireInterval = FMath::Max(static_cast<double>(EquippedWeapon->GetNextShotCooldown()), 0.0);
@@ -876,6 +886,13 @@ FValorShooterStance UValorCombatComponent::BuildShooterStance() const
 	}
 
 	return Stance;
+}
+
+bool UValorCombatComponent::IsFireAllowedByMatch() const
+{
+	const UWorld* World = GetWorld();
+	const AValorGameState* ValorGameState = World ? World->GetGameState<AValorGameState>() : nullptr;
+	return !ValorGameState || ValorGameState->IsWeaponFireAllowed();
 }
 
 double UValorCombatComponent::GetSynchronizedTime() const
@@ -1526,7 +1543,12 @@ void UValorCombatComponent::ReScopeAfterShot()
 	}
 }
 
-void UValorCombatComponent::DropWeaponInSlot(EValorWeaponSlot Slot, bool bSelectFallback)
+void UValorCombatComponent::RemoveWeaponInSlot(EValorWeaponSlot Slot)
+{
+	DropWeaponInSlot(Slot, true, false);
+}
+
+void UValorCombatComponent::DropWeaponInSlot(EValorWeaponSlot Slot, bool bSelectFallback, bool bSpawnPickup)
 {
 	UWorld* World = GetWorld();
 	AValorWeaponBase* WeaponToDrop = GetWeaponInSlot(Slot);
@@ -1538,17 +1560,20 @@ void UValorCombatComponent::DropWeaponInSlot(EValorWeaponSlot Slot, bool bSelect
 	SetSlotWeapon(Slot, nullptr);
 
 	// 바닥의 총은 별도 픽업 액터로 만들고(총 종류 + 탄약을 옮김), 손에 들고 있던 무기 액터는 파괴한다.
-	// 픽업은 서버에서 스폰되어 복제되므로 모든 클라에 같은 위치로 보인다.
-	UClass* PickupClass = DroppedWeaponPickupClass ? DroppedWeaponPickupClass.Get() : AValorWeaponPickup::StaticClass();
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	if (AValorWeaponPickup* DroppedPickup = World->SpawnActor<AValorWeaponPickup>(PickupClass, ComputeDropTransform(), SpawnParameters))
+	// 픽업은 서버에서 스폰되어 복제되므로 모든 클라에 같은 위치로 보인다. 되팔기는 픽업 없이 없앤다.
+	if (bSpawnPickup)
 	{
-		DroppedPickup->InitializeFromDroppedWeapon(*WeaponToDrop);
-	}
-	else
-	{
-		UE_LOG(LogValorCombat, Warning, TEXT("총을 떨어뜨릴 픽업을 스폰하지 못했다: %s"), *GetNameSafe(WeaponToDrop));
+		UClass* PickupClass = DroppedWeaponPickupClass ? DroppedWeaponPickupClass.Get() : AValorWeaponPickup::StaticClass();
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		if (AValorWeaponPickup* DroppedPickup = World->SpawnActor<AValorWeaponPickup>(PickupClass, ComputeDropTransform(), SpawnParameters))
+		{
+			DroppedPickup->InitializeFromDroppedWeapon(*WeaponToDrop);
+		}
+		else
+		{
+			UE_LOG(LogValorCombat, Warning, TEXT("총을 떨어뜨릴 픽업을 스폰하지 못했다: %s"), *GetNameSafe(WeaponToDrop));
+		}
 	}
 
 	WeaponToDrop->OnUnequipped();
@@ -1813,7 +1838,8 @@ void UValorCombatComponent::PerformHitScan(const FVector& TraceStart, const FVec
 	{
 		AValorCharacter* CandidateCharacter = *It;
 		// 시체는 판정 대상이 아니다(탄을 막지도, 피해를 받지도 않는다). 사망은 서버가 확정하므로 서버 상태만 본다.
-		if (!CandidateCharacter || CandidateCharacter == OwnerCharacter || !CandidateCharacter->IsAlive())
+		// 아군도 대상이 아니다(발로란트: 아군 사격 없음, 탄이 아군을 그대로 지나간다). 팀은 PlayerState 복제값이라 예측도 같다.
+		if (!CandidateCharacter || CandidateCharacter == OwnerCharacter || !CandidateCharacter->IsAlive() || ValorTeams::AreAllies(OwnerCharacter, CandidateCharacter))
 		{
 			continue;
 		}

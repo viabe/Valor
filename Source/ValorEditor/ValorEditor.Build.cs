@@ -18,6 +18,7 @@ public class ValorEditor : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"AssetRegistry",
+			"UnrealEd",
 			"Valor"
 		});
 	}

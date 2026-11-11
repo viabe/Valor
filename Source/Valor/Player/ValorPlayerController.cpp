@@ -1,6 +1,11 @@
 #include "ValorPlayerController.h"
 
 #include "Kismet/GameplayStatics.h"
+#include "ValorCharacter.h"
+#include "ValorGameState.h"
+#include "Player/ValorPlayerState.h"
+#include "ValorMatchGameMode.h"
+#include "Weapons/ValorWeaponBase.h"
 #include "Sound/SoundBase.h"
 
 void AValorPlayerController::BeginPlay()
@@ -69,4 +74,130 @@ void AValorPlayerController::ClearDeathFeedback()
 {
 	bHasDeathInfo = false;
 	DamageIndicators.Reset();
+}
+
+void AValorPlayerController::ToggleBuyMenu()
+{
+	SetBuyMenuOpen(!bBuyMenuOpen);
+}
+
+void AValorPlayerController::SetBuyMenuOpen(bool bOpen)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	// 구매 단계에 살아 있을 때만 연다(닫기는 언제나 된다).
+	if (bOpen)
+	{
+		const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
+		const AValorCharacter* PossessedCharacter = Cast<AValorCharacter>(GetPawn());
+		if (!ValorGameState || !ValorGameState->IsBuyPhase() || !PossessedCharacter || !PossessedCharacter->IsAlive())
+		{
+			return;
+		}
+	}
+
+	if (bBuyMenuOpen == bOpen)
+	{
+		return;
+	}
+
+	bBuyMenuOpen = bOpen;
+
+	// 메뉴는 캔버스 HUD의 클릭 영역(HitBox)으로 고른다: 커서 + 클릭 이벤트를 켜고, 마우스가 시점을 돌리지 않게 한다.
+	bShowMouseCursor = bOpen;
+	bEnableClickEvents = bOpen;
+	if (bOpen)
+	{
+		FInputModeGameAndUI InputMode;
+		InputMode.SetHideCursorDuringCapture(false);
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+		SetInputMode(InputMode);
+		SetIgnoreLookInput(true);
+	}
+	else
+	{
+		SetInputMode(FInputModeGameOnly());
+		ResetIgnoreLookInput();
+	}
+}
+
+void AValorPlayerController::PlayerTick(float DeltaTime)
+{
+	Super::PlayerTick(DeltaTime);
+
+	// 구매 단계가 끝나거나 죽으면 메뉴를 닫는다.
+	if (bBuyMenuOpen)
+	{
+		const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
+		const AValorCharacter* PossessedCharacter = Cast<AValorCharacter>(GetPawn());
+		if (!ValorGameState || !ValorGameState->IsBuyPhase() || !PossessedCharacter || !PossessedCharacter->IsAlive())
+		{
+			SetBuyMenuOpen(false);
+		}
+	}
+}
+
+void AValorPlayerController::ServerBuyWeapon_Implementation(TSubclassOf<AValorWeaponBase> WeaponClass)
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TryBuyWeapon(this, WeaponClass);
+	}
+}
+
+void AValorPlayerController::ServerSellWeapon_Implementation(TSubclassOf<AValorWeaponBase> WeaponClass)
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TrySellWeapon(this, WeaponClass);
+	}
+}
+
+void AValorPlayerController::ServerBuyShield_Implementation(int32 ShieldIndex)
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TryBuyShield(this, ShieldIndex);
+	}
+}
+
+void AValorPlayerController::ServerSellShield_Implementation(int32 ShieldIndex)
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TrySellShield(this, ShieldIndex);
+	}
+}
+
+void AValorPlayerController::ValorCredits(int32 Amount)
+{
+	ServerDebugSetCredits(Amount);
+}
+
+void AValorPlayerController::ValorSkipPhase()
+{
+	ServerDebugSkipPhase();
+}
+
+void AValorPlayerController::ServerDebugSetCredits_Implementation(int32 Amount)
+{
+#if !UE_BUILD_SHIPPING
+	if (AValorPlayerState* ValorPlayerState = GetPlayerState<AValorPlayerState>())
+	{
+		ValorPlayerState->SetCredits(Amount);
+	}
+#endif
+}
+
+void AValorPlayerController::ServerDebugSkipPhase_Implementation()
+{
+#if !UE_BUILD_SHIPPING
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->DebugSkipPhase();
+	}
+#endif
 }

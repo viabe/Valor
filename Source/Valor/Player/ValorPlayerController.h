@@ -82,6 +82,42 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientNotifyKilled(const FValorDeathInfo& DeathInfo);
 
+	// === 상점 ===
+	// 구매 메뉴(로컬 화면). 구매 단계에 살아 있을 때만 열린다. 열려 있으면 마우스 커서가 보이고 시점 회전이 멈춘다.
+	void ToggleBuyMenu();
+	void SetBuyMenuOpen(bool bOpen);
+	bool IsBuyMenuOpen() const { return bBuyMenuOpen; }
+
+	// 서버 RPC: 규칙 검사(구매 단계·크레딧·상점 목록)는 서버 게임 모드가 한다. 실패는 조용히 무시한다(크레딧 복제로 결과가 보인다).
+	UFUNCTION(Server, Reliable)
+	void ServerBuyWeapon(TSubclassOf<AValorWeaponBase> WeaponClass);
+
+	UFUNCTION(Server, Reliable)
+	void ServerSellWeapon(TSubclassOf<AValorWeaponBase> WeaponClass);
+
+	UFUNCTION(Server, Reliable)
+	void ServerBuyShield(int32 ShieldIndex);
+
+	UFUNCTION(Server, Reliable)
+	void ServerSellShield(int32 ShieldIndex);
+
+	virtual void PlayerTick(float DeltaTime) override;
+
+	// === 개발용 콘솔 명령(경기 모드 테스트). 출시 빌드에서는 서버가 무시한다 ===
+	// ValorCredits 9000: 내 크레딧을 정한다.
+	UFUNCTION(Exec)
+	void ValorCredits(int32 Amount);
+
+	// ValorSkipPhase: 지금 단계(대기·구매·교전·라운드 종료·경기 종료)를 바로 끝낸다. 교전을 건너뛰면 시간 종료(수비 승)로 처리된다.
+	UFUNCTION(Exec)
+	void ValorSkipPhase();
+
+	UFUNCTION(Server, Reliable)
+	void ServerDebugSetCredits(int32 Amount);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDebugSkipPhase();
+
 	// === HUD가 읽는 값(로컬 월드 시간 기준) ===
 	const FValorHitConfirm& GetLastHitConfirm() const { return LastHitConfirm; }
 	double GetLastHitConfirmTime() const { return LastHitConfirmTime; }
@@ -118,6 +154,8 @@ private:
 	FValorDeathInfo LastDeathInfo;
 
 	bool bHasDeathInfo = false;
+
+	bool bBuyMenuOpen = false;
 
 	double GetLocalTime() const;
 	void ClearDeathFeedback();

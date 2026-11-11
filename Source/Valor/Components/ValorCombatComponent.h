@@ -109,6 +109,9 @@ public:
 	// bMakeActive = 바로 꺼내 든다. bInstantEquip = 장착 시간 없이 바로 쏠 수 있다(스폰 지급용).
 	void GiveWeapon(TSubclassOf<AValorWeaponBase> WeaponClass, bool bMakeActive = true, bool bInstantEquip = false);
 
+	// 서버 전용: 슬롯의 총을 바닥에 떨어뜨리지 않고 없앤다(상점 되팔기). 든 총이면 남은 가장 좋은 무기를 꺼낸다.
+	void RemoveWeaponInSlot(EValorWeaponSlot Slot);
+
 	// 이 머신에서 인벤토리(총 두 칸 + 칼)를 시점에 맞게 다시 붙인다(로컬 플레이어 = 1인칭 뷰모델, 그 외 = 3인칭 손).
 	// 캐릭터가 빙의·컨트롤러 복제 때 호출한다. 부착은 복제되지 않는 머신별 연출이다.
 	void RefreshEquipmentViewAttachment();
@@ -415,7 +418,10 @@ private:
 
 	// 서버 전용: 슬롯의 총을 바닥 픽업으로 바꿔 내려놓는다(총 종류·탄약 유지). 교체·버리기·사망 드롭이 같이 쓴다.
 	// bSelectFallback이면, 든 총을 버린 경우 남은 가장 좋은 무기를 꺼낸다(교체처럼 곧바로 다른 총을 넣을 때는 false).
-	void DropWeaponInSlot(EValorWeaponSlot Slot, bool bSelectFallback);
+	void DropWeaponInSlot(EValorWeaponSlot Slot, bool bSelectFallback, bool bSpawnPickup = true);
+
+	// 지금 경기 단계에서 총을 쏠 수 있나(경기 종료면 못 쏜다. 구매 단계는 게임 모드 설정). 클라 예측과 서버 검증이 같은 GameState 값을 본다.
+	bool IsFireAllowedByMatch() const;
 
 	// 서버 전용: 칼이 없으면 스폰한다(스폰 직후·첫 지급 시).
 	void EnsureMeleeWeapon();

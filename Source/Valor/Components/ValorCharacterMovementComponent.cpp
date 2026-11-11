@@ -1,4 +1,5 @@
 #include "Components/ValorCharacterMovementComponent.h"
+#include "ValorGameState.h"
 
 #include "Components/ValorCombatComponent.h"
 #include "Engine/World.h"
@@ -175,6 +176,15 @@ void UValorCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick
 
 float UValorCharacterMovementComponent::GetMaxSpeed() const
 {
+	// 구매 단계(게임 모드가 켠 경우만, 기본 끔): 수평 이동을 묶는다. 복제된 GameState 단계를 서버와 소유 클라가 같이 보므로 이동 예측이 맞는다
+	// (단계가 바뀌는 순간의 몇 프레임 차이는 보정으로 끝난다).
+	const UWorld* World = GetWorld();
+	const AValorGameState* ValorGameState = World ? World->GetGameState<AValorGameState>() : nullptr;
+	if (ValorGameState && ValorGameState->IsMovementLocked() && (MovementMode == MOVE_Walking || MovementMode == MOVE_NavWalking || MovementMode == MOVE_Falling))
+	{
+		return 0.0f;
+	}
+
 	const float EquipMultiplier = ValorMovement::DequantizeSpeedMultiplier(EquipSpeedQuantized);
 
 	switch (MovementMode)

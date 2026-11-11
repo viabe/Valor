@@ -102,26 +102,33 @@ void AValorGameMode::HandleCharacterKilled(AValorCharacter* Victim, const FValor
 	Entry.WeaponClass = KillerWeapon ? KillerWeapon->GetClass() : nullptr;
 	Entry.bHeadshot = bHeadshot;
 	Entry.bWallbang = KillingEvent.bPenetrated;
+	Entry.KillerTeam = KillerState ? KillerState->GetTeam() : EValorTeam::None;
+	Entry.VictimTeam = VictimState ? VictimState->GetTeam() : EValorTeam::None;
 
 	if (AValorGameState* ValorGameState = GetGameState<AValorGameState>())
 	{
 		ValorGameState->BroadcastKill(Entry);
 	}
 
-	// 3) 피해자 화면: 누가 무엇으로 죽였고 언제 부활하는지.
-	const float SafeRespawnDelay = FMath::Max(RespawnDelay, 0.01f);
+	// 3) 피해자 화면: 누가 무엇으로 죽였고 언제 부활하는지(부활하지 않는 모드는 부활 시각 -1).
+	const float RespawnDelayAfterDeath = GetRespawnDelayAfterDeath();
+	const bool bWillRespawn = RespawnDelayAfterDeath >= 0.0f;
+	const float SafeRespawnDelay = FMath::Max(RespawnDelayAfterDeath, 0.01f);
 	if (AValorPlayerController* VictimPlayerController = Cast<AValorPlayerController>(VictimController))
 	{
 		FValorDeathInfo DeathInfo;
 		DeathInfo.KillerName = Entry.KillerName;
 		DeathInfo.WeaponClass = Entry.WeaponClass;
 		DeathInfo.bHeadshot = bHeadshot;
-		DeathInfo.RespawnServerTime = static_cast<float>(World->GetTimeSeconds() + SafeRespawnDelay);
+		DeathInfo.RespawnServerTime = bWillRespawn ? static_cast<float>(World->GetTimeSeconds() + SafeRespawnDelay) : -1.0f;
 		VictimPlayerController->ClientNotifyKilled(DeathInfo);
 	}
 
-	// 4) 부활 예약. 컨트롤러는 약참조로 넘겨, 그 사이 접속을 끊으면 아무 일도 하지 않는다.
-	if (VictimController)
+	// 4) 모드별 규칙(처치 보상, 전멸 판정 등).
+	OnCharacterKilled(Victim, VictimController, VictimState, KillerState, bSelfKill);
+
+	// 5) 부활 예약. 컨트롤러는 약참조로 넘겨, 그 사이 접속을 끊으면 아무 일도 하지 않는다.
+	if (VictimController && bWillRespawn)
 	{
 		FTimerHandle RespawnTimerHandle;
 		World->GetTimerManager().SetTimer(RespawnTimerHandle,

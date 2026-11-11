@@ -25,6 +25,9 @@ class VALOR_API AValorHUD : public AHUD
 public:
 	virtual void DrawHUD() override;
 
+	// 구매 메뉴 칸 클릭(캔버스 클릭 영역). 이번 라운드에 산 칸이면 되팔고, 아니면 산다.
+	virtual void NotifyHitBoxClick(FName BoxName) override;
+
 protected:
 	// 아래 길이/두께/간격은 1080p 기준 픽셀이며 해상도에 비례해 확대된다(발로란트 기본 크로스헤어 근사값).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair")
@@ -150,6 +153,16 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
 	FLinearColor DamageIndicatorColor = FLinearColor(0.9f, 0.1f, 0.1f, 0.85f);
 
+	// === 글자·패널 크기 ===
+	// 글자가 있는 HUD(체력·탄약, 무기 칸, 킬피드, 점수판, 크레딧, 라운드 배너, 구매 메뉴, 사망 화면) 전체의 배율. 1080p 기준 크기에 곱한다.
+	// 콘솔 Valor.HUD.TextScale <값>으로 실행 중에 바꿀 수 있다(0이면 이 기본값). 크로스헤어·히트마커·조준경은 이 값을 쓰지 않는다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Text", meta=(ClampMin="0.5", ClampMax="3.0"))
+	float TextScale = 1.4f;
+
+	// 창이 작아도(PIE) 글자가 이 배율(1080p 대비) 아래로 줄지 않는다. 예: 720p 창이면 창 비율 0.67 대신 0.9를 쓴다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Text", meta=(ClampMin="0.3", ClampMax="2.0"))
+	float MinTextUIScale = 0.9f;
+
 	// 킬피드 한 줄이 화면에 남아 있는 시간(초).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.5"))
 	float KillFeedDuration = 6.0f;
@@ -171,6 +184,13 @@ private:
 	void DrawKillFeed(float UIScale);
 	void DrawScore(float CenterX, float UIScale);
 	void DrawDeathOverlay(float CenterX, float CenterY, float UIScale);
+
+	// 경기 모드(라운드제) 화면: 위 가운데 점수·남은 시간·단계, 왼쪽 아래 크레딧, 라운드 결과 배너, 구매 메뉴.
+	void DrawMatchStatus(float CenterX, float UIScale);
+	void DrawCredits(float UIScale);
+	void DrawRoundBanner(float CenterX, float CenterY, float UIScale);
+	void DrawBuyMenu(float CenterX, float UIScale);
+	bool UsesRounds() const;
 
 	// 그림자 있는 텍스트. AlignX: 0 = 왼쪽 정렬, 0.5 = 가운데, 1 = 오른쪽. 그린 높이를 돌려준다(줄 쌓기용).
 	float DrawShadowedText(const FString& Text, const FLinearColor& Color, float X, float Y, class UFont* Font, float Scale, float AlignX);

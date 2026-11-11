@@ -39,6 +39,12 @@ public:
 	virtual void SetPlayerDefaults(APawn* PlayerPawn) override;
 
 protected:
+	// 이 처치 뒤 부활까지 시간(초). 음수면 부활하지 않는다(라운드제: 다음 라운드 시작에 다시 스폰).
+	virtual float GetRespawnDelayAfterDeath() const { return RespawnDelay; }
+
+	// 전적·킬피드·사망 정보를 처리한 뒤 부르는 규칙 훅(서버). 라운드제 모드가 처치 보상·전멸 판정을 여기서 한다.
+	virtual void OnCharacterKilled(AValorCharacter* Victim, AController* VictimController, class AValorPlayerState* VictimState, class AValorPlayerState* KillerState, bool bSelfKill) {}
+
 	// 사망 후 부활까지 시간(초).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Respawn", meta=(ClampMin="0.0"))
 	float RespawnDelay = 3.0f;

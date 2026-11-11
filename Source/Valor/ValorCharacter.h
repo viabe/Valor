@@ -157,6 +157,9 @@ public:
 	void HandleCrouchInputReleased();
 
 	void HandleFireInputPressed();
+
+	// 로컬 컨트롤러의 구매 메뉴가 열려 있나(열려 있으면 사격·조준 입력을 무시한다).
+	bool IsBuyMenuOpen() const;
 	void HandleFireInputReleased();
 	void HandleReloadInputPressed();
 	void HandleADSInputPressed();

@@ -1,5 +1,7 @@
 #include "ValorInputRouterComponent.h"
 
+#include "Player/ValorPlayerController.h"
+
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
@@ -39,7 +41,7 @@ void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponen
 		return;
 	}
 
-	SetupWeaponSlotInput(EnhancedInputComponent, Subsystem);
+	SetupWeaponSlotInput(EnhancedInputComponent, Subsystem, PlayerController);
 
 	if (JumpAction)
 	{
@@ -100,33 +102,45 @@ void UValorInputRouterComponent::SetupInput(UInputComponent* PlayerInputComponen
 	}
 }
 
-UInputAction* UValorInputRouterComponent::CreateBooleanAction(const TCHAR* ActionName)
+UInputAction* UValorInputRouterComponent::FindOrCreateBooleanAction(UObject* Outer, const TCHAR* ActionName)
 {
-	UInputAction* Action = NewObject<UInputAction>(this, FName(ActionName), RF_Transient);
+	if (UInputAction* Existing = FindObject<UInputAction>(Outer, ActionName))
+	{
+		return Existing;
+	}
+
+	UInputAction* Action = NewObject<UInputAction>(Outer, FName(ActionName), RF_Transient);
 	Action->ValueType = EInputActionValueType::Boolean;
 	return Action;
 }
 
-void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* EnhancedInputComponent, UEnhancedInputLocalPlayerSubsystem* Subsystem)
+void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* EnhancedInputComponent, UEnhancedInputLocalPlayerSubsystem* Subsystem, APlayerController* PlayerController)
 {
-	// 컨텍스트·액션은 처음 한 번만 만들고, 바인딩은 입력 컴포넌트가 새로 만들어질 때(빙의할 때)마다 다시 건다.
+	// 컨텍스트·액션은 컨트롤러 밑에 한 벌만 만들고, 캐릭터가 새로 스폰될 때마다 같은 것을 다시 바인딩한다.
+	// 캐릭터(이 컴포넌트)마다 새로 만들면 죽거나 라운드 시작에 지워진 캐릭터의 컨텍스트가 입력 서브시스템에 그대로 남아
+	// 같은 키(1/2/3/G/B/휠)를 먼저 가져간다(같은 우선순위, 액션 기본값이 입력 소비). 그러면 새 캐릭터의 바인딩이 불리지 않는다.
+	UObject* Outer = PlayerController;
+	WeaponSlotMappingContext = FindObject<UInputMappingContext>(Outer, TEXT("ValorWeaponSlotMappingContext"));
+	EquipPrimaryAction = FindOrCreateBooleanAction(Outer, TEXT("IA_EquipPrimary"));
+	EquipSecondaryAction = FindOrCreateBooleanAction(Outer, TEXT("IA_EquipSecondary"));
+	EquipMeleeAction = FindOrCreateBooleanAction(Outer, TEXT("IA_EquipMelee"));
+	NextWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_NextWeapon"));
+	PreviousWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_PreviousWeapon"));
+	DropWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_DropWeapon"));
+	BuyMenuAction = FindOrCreateBooleanAction(Outer, TEXT("IA_BuyMenu"));
+
 	if (!WeaponSlotMappingContext)
 	{
-		WeaponSlotMappingContext = NewObject<UInputMappingContext>(this, TEXT("WeaponSlotMappingContext"), RF_Transient);
-		EquipPrimaryAction = CreateBooleanAction(TEXT("IA_EquipPrimary"));
-		EquipSecondaryAction = CreateBooleanAction(TEXT("IA_EquipSecondary"));
-		EquipMeleeAction = CreateBooleanAction(TEXT("IA_EquipMelee"));
-		NextWeaponAction = CreateBooleanAction(TEXT("IA_NextWeapon"));
-		PreviousWeaponAction = CreateBooleanAction(TEXT("IA_PreviousWeapon"));
-		DropWeaponAction = CreateBooleanAction(TEXT("IA_DropWeapon"));
+		WeaponSlotMappingContext = NewObject<UInputMappingContext>(Outer, TEXT("ValorWeaponSlotMappingContext"), RF_Transient);
 
-		// 발로란트 기본 키: 1 주무기 / 2 보조무기 / 3 근접 / G 버리기. 휠은 다음·이전 무기(아래 = 다음).
+		// 발로란트 기본 키: 1 주무기 / 2 보조무기 / 3 근접 / G 버리기 / B 상점. 휠은 다음·이전 무기(아래 = 다음).
 		WeaponSlotMappingContext->MapKey(EquipPrimaryAction, EKeys::One);
 		WeaponSlotMappingContext->MapKey(EquipSecondaryAction, EKeys::Two);
 		WeaponSlotMappingContext->MapKey(EquipMeleeAction, EKeys::Three);
 		WeaponSlotMappingContext->MapKey(NextWeaponAction, EKeys::MouseScrollDown);
 		WeaponSlotMappingContext->MapKey(PreviousWeaponAction, EKeys::MouseScrollUp);
 		WeaponSlotMappingContext->MapKey(DropWeaponAction, EKeys::G);
+		WeaponSlotMappingContext->MapKey(BuyMenuAction, EKeys::B);
 	}
 
 	if (Subsystem)
@@ -141,6 +155,7 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 	EnhancedInputComponent->BindAction(NextWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleNextWeaponStarted);
 	EnhancedInputComponent->BindAction(PreviousWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandlePreviousWeaponStarted);
 	EnhancedInputComponent->BindAction(DropWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleDropWeaponStarted);
+	EnhancedInputComponent->BindAction(BuyMenuAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleBuyMenuStarted);
 }
 
 void UValorInputRouterComponent::HandleMove(const FInputActionValue& Value)
@@ -300,5 +315,14 @@ void UValorInputRouterComponent::HandleDropWeaponStarted(const FInputActionValue
 	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
 	{
 		OwnerCharacter->HandleDropWeaponInput();
+	}
+}
+
+void UValorInputRouterComponent::HandleBuyMenuStarted(const FInputActionValue& Value)
+{
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (AValorPlayerController* PlayerController = OwnerPawn ? Cast<AValorPlayerController>(OwnerPawn->GetController()) : nullptr)
+	{
+		PlayerController->ToggleBuyMenu();
 	}
 }

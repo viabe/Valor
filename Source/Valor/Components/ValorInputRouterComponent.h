@@ -33,8 +33,8 @@ public:
 	void SetupInput(UInputComponent* PlayerInputComponent, APlayerController* PlayerController, UInputMappingContext* MappingContext, UInputAction* MoveAction, UInputAction* LookAction, UInputAction* JumpAction, UInputAction* WalkAction, UInputAction* CrouchAction, UInputAction* FireAction, UInputAction* ReloadAction, UInputAction* ADSAction, UInputAction* InteractAction);
 
 private:
-	void SetupWeaponSlotInput(UEnhancedInputComponent* EnhancedInputComponent, UEnhancedInputLocalPlayerSubsystem* Subsystem);
-	UInputAction* CreateBooleanAction(const TCHAR* ActionName);
+	void SetupWeaponSlotInput(UEnhancedInputComponent* EnhancedInputComponent, UEnhancedInputLocalPlayerSubsystem* Subsystem, APlayerController* PlayerController);
+	static UInputAction* FindOrCreateBooleanAction(UObject* Outer, const TCHAR* ActionName);
 
 	void HandleMove(const FInputActionValue& Value);
 	void HandleLook(const FInputActionValue& Value);
@@ -56,6 +56,7 @@ private:
 	void HandleNextWeaponStarted(const FInputActionValue& Value);
 	void HandlePreviousWeaponStarted(const FInputActionValue& Value);
 	void HandleDropWeaponStarted(const FInputActionValue& Value);
+	void HandleBuyMenuStarted(const FInputActionValue& Value);
 
 	// 무기 슬롯 입력 컨텍스트와 액션(로컬 플레이어에서만 런타임 생성). UPROPERTY로 GC에서 보호한다.
 	UPROPERTY(Transient)
@@ -78,4 +79,8 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> DropWeaponAction;
+
+	// 구매 메뉴 열기/닫기(B). 무기 슬롯 키와 같은 런타임 입력 컨텍스트에 둔다.
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> BuyMenuAction;
 };

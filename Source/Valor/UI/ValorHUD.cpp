@@ -17,6 +17,8 @@
 #include "ValorGameState.h"
 #include "Weapons/ValorWeaponBase.h"
 #include "Weapons/ValorWeaponTypes.h"
+#include "AbilitySystemComponent.h"
+#include "ValorMatchTypes.h"
 
 namespace
 {
@@ -27,6 +29,12 @@ namespace
 		0,
 		TEXT("1이면 스프레이 진행도/반동/탄퍼짐 수치와 다음 탄의 반동 위치(빨간 점)·탄퍼짐 원을 화면에 표시한다."),
 		ECVF_Cheat);
+
+	TAutoConsoleVariable<float> CVarValorHUDTextScale(
+		TEXT("Valor.HUD.TextScale"),
+		0.0f,
+		TEXT("HUD 글자·패널 배율(1080p 기준 대비). 0이면 HUD 기본값(TextScale)을 쓴다."),
+		ECVF_Default);
 
 	TAutoConsoleVariable<int32> CVarValorHitMarker(
 		TEXT("Valor.HUD.HitMarker"),
@@ -63,6 +71,10 @@ void AValorHUD::DrawHUD()
 	const float CenterY = Canvas->ClipY * 0.5f;
 	const float UIScale = Canvas->ClipY / 1080.0f;
 
+	// 글자가 있는 HUD는 따로 키운다: 창이 작아도 MinTextUIScale 아래로 줄지 않고, 그 위에 글자 배율을 곱한다.
+	const float TextScaleOverride = CVarValorHUDTextScale.GetValueOnGameThread();
+	const float TextUIScale = FMath::Max(UIScale, MinTextUIScale) * (TextScaleOverride > 0.0f ? TextScaleOverride : TextScale);
+
 	// 현재 카메라 수평 FOV로 초점거리(픽셀)를 구한다. ADS 줌 중에는 같은 각도가 화면에서 더 크게 보인다.
 	const float HorizontalFOV = PlayerOwner->PlayerCameraManager ? PlayerOwner->PlayerCameraManager->GetFOVAngle() : 103.0f;
 	const float FocalLengthPixels = (Canvas->ClipX * 0.5f) / FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(HorizontalFOV, 5.0f, 170.0f) * 0.5f));
@@ -79,7 +91,7 @@ void AValorHUD::DrawHUD()
 
 	if (bLocalDead)
 	{
-		DrawDeathOverlay(CenterX, CenterY, UIScale);
+		DrawDeathOverlay(CenterX, CenterY, TextUIScale);
 	}
 	// 저격총 조준 중: 조준경이 크로스헤어를 대신한다(일반 크로스헤어/ADS 점은 그리지 않는다).
 	else if (bHasWeapon && CombatComponent->IsScopeOverlayActive() && CombatComponent->GetEquippedWeapon())
@@ -133,12 +145,23 @@ void AValorHUD::DrawHUD()
 		DrawHitMarker(CenterX, CenterY, UIScale);
 		if (Character)
 		{
-			DrawVitals(*Character, CombatComponent, CenterX, UIScale);
+			DrawVitals(*Character, CombatComponent, CenterX, TextUIScale);
 		}
 	}
 
-	DrawKillFeed(UIScale);
-	DrawScore(CenterX, UIScale);
+	DrawKillFeed(TextUIScale);
+	DrawScore(CenterX, TextUIScale);
+
+	if (UsesRounds())
+	{
+		DrawMatchStatus(CenterX, TextUIScale);
+		DrawRoundBanner(CenterX, CenterY, TextUIScale);
+		if (!bLocalDead)
+		{
+			DrawCredits(TextUIScale);
+		}
+		DrawBuyMenu(CenterX, TextUIScale);
+	}
 }
 
 void AValorHUD::DrawCrosshairLines(float CenterX, float CenterY, float Length, float Thickness, float Offset, float Opacity)
@@ -538,8 +561,8 @@ void AValorHUD::DrawWeaponSlots(const UValorCombatComponent& CombatComponent, fl
 
 		const bool bActive = Row.Slot == ActiveSlot;
 		const FLinearColor RowColor = bActive ? FLinearColor::White : FLinearColor(0.6f, 0.6f, 0.6f, 0.75f);
-		const float TextScale = (bActive ? 1.15f : 1.0f) * UIScale;
-		DrawShadowedText(FString::Printf(TEXT("%s   %s"), *SlotName.ToString().ToUpper(), Row.Key), RowColor, RightX, Y, Font, TextScale, 1.0f);
+		const float RowTextScale = (bActive ? 1.15f : 1.0f) * UIScale;
+		DrawShadowedText(FString::Printf(TEXT("%s   %s"), *SlotName.ToString().ToUpper(), Row.Key), RowColor, RightX, Y, Font, RowTextScale, 1.0f);
 
 		// 장착 중: 든 슬롯 아래에 진행 막대(장착 시간 동안 채워진다). 다 차야 쏠 수 있다.
 		if (bActive && !CombatComponent.IsEquipReady())
@@ -631,7 +654,9 @@ void AValorHUD::DrawScore(float CenterX, float UIScale)
 	}
 
 	const FString ScoreText = FString::Printf(TEXT("K %d   D %d   HS %d"), ValorPlayerState->GetKills(), ValorPlayerState->GetDeaths(), ValorPlayerState->GetHeadshotKills());
-	DrawShadowedText(ScoreText, FLinearColor(1.0f, 1.0f, 1.0f, 0.9f), CenterX, 24.0f * UIScale, GEngine->GetMediumFont(), UIScale, 0.5f);
+	// 경기 모드에서는 위 가운데를 점수판이 쓰므로 그 아래로 내린다.
+	const float ScoreY = (UsesRounds() ? 112.0f : 24.0f) * UIScale;
+	DrawShadowedText(ScoreText, FLinearColor(1.0f, 1.0f, 1.0f, 0.9f), CenterX, ScoreY, GEngine->GetMediumFont(), UIScale, 0.5f);
 }
 
 void AValorHUD::DrawDeathOverlay(float CenterX, float CenterY, float UIScale)
@@ -673,9 +698,349 @@ void AValorHUD::DrawDeathOverlay(float CenterX, float CenterY, float UIScale)
 	Y += DrawShadowedText(Title, FLinearColor(1.0f, 0.35f, 0.35f, 1.0f), CenterX, Y, GEngine->GetLargeFont(), 1.6f * UIScale, 0.5f);
 	Y += 6.0f * UIScale;
 	Y += DrawShadowedText(Detail, FLinearColor::White, CenterX, Y, GEngine->GetMediumFont(), 1.2f * UIScale, 0.5f);
-	if (RemainingSeconds >= 0.0f)
+	const bool bWillRespawn = ValorController && ValorController->HasDeathInfo() && ValorController->GetLastDeathInfo().RespawnServerTime >= 0.0f;
+	if (bWillRespawn && RemainingSeconds >= 0.0f)
 	{
 		Y += 10.0f * UIScale;
 		DrawShadowedText(FString::Printf(TEXT("RESPAWN IN %.1f"), RemainingSeconds), FLinearColor(0.85f, 0.85f, 0.85f, 1.0f), CenterX, Y, GEngine->GetMediumFont(), UIScale, 0.5f);
+	}
+	else if (!bWillRespawn)
+	{
+		// 라운드제: 다음 라운드 시작에 다시 스폰된다.
+		Y += 10.0f * UIScale;
+		DrawShadowedText(TEXT("WAITING FOR NEXT ROUND"), FLinearColor(0.85f, 0.85f, 0.85f, 1.0f), CenterX, Y, GEngine->GetMediumFont(), UIScale, 0.5f);
+	}
+}
+
+// ======================================================================================
+// 경기 모드(라운드제) 화면
+// ======================================================================================
+
+namespace ValorMatchHUD
+{
+	const FLinearColor AllyColor(0.35f, 0.95f, 0.8f, 1.0f);
+	const FLinearColor EnemyColor(1.0f, 0.35f, 0.35f, 1.0f);
+
+	FString FormatTime(float Seconds)
+	{
+		const int32 Total = FMath::CeilToInt(FMath::Max(Seconds, 0.0f));
+		return FString::Printf(TEXT("%d:%02d"), Total / 60, Total % 60);
+	}
+
+	const TCHAR* CategoryLabel(EValorWeaponCategory Category)
+	{
+		switch (Category)
+		{
+		case EValorWeaponCategory::Sidearm: return TEXT("SIDEARMS");
+		case EValorWeaponCategory::SMG: return TEXT("SMGS");
+		case EValorWeaponCategory::Shotgun: return TEXT("SHOTGUNS");
+		case EValorWeaponCategory::Rifle: return TEXT("RIFLES");
+		case EValorWeaponCategory::Sniper: return TEXT("SNIPERS");
+		case EValorWeaponCategory::Heavy: return TEXT("HEAVIES");
+		default: return TEXT("");
+		}
+	}
+}
+
+bool AValorHUD::UsesRounds() const
+{
+	const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
+	return ValorGameState && ValorGameState->UsesRounds();
+}
+
+void AValorHUD::DrawMatchStatus(float CenterX, float UIScale)
+{
+	const AValorGameState* ValorGameState = GetWorld()->GetGameState<AValorGameState>();
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (!ValorGameState || !GEngine)
+	{
+		return;
+	}
+
+	// 내 팀 점수는 왼쪽(아군 색), 상대는 오른쪽(적 색). 팀이 없으면(관전) TeamA를 왼쪽에 둔다.
+	const EValorTeam LocalTeam = ValorPlayerState && ValorPlayerState->GetTeam() != EValorTeam::None ? ValorPlayerState->GetTeam() : EValorTeam::TeamA;
+	const EValorTeam EnemyTeam = ValorTeams::GetOpposingTeam(LocalTeam);
+
+	const float BoxWidth = 300.0f * UIScale;
+	const float BoxHeight = 78.0f * UIScale;
+	const float Top = 12.0f * UIScale;
+	DrawRect2D(FLinearColor::Black, CenterX - (BoxWidth * 0.5f), Top, BoxWidth, BoxHeight, 0.45f);
+
+	UFont* LargeFont = GEngine->GetLargeFont();
+	UFont* SmallFont = GEngine->GetSmallFont();
+	const float TimeRemaining = ValorGameState->GetPhaseTimeRemaining();
+	const FString TimeText = TimeRemaining >= 0.0f ? ValorMatchHUD::FormatTime(TimeRemaining) : TEXT("--:--");
+	const bool bTimeLow = ValorGameState->GetRoundPhase() == EValorRoundPhase::Combat && TimeRemaining >= 0.0f && TimeRemaining <= 10.0f;
+	const FLinearColor TimeColor = bTimeLow ? ValorMatchHUD::EnemyColor : FLinearColor::White;
+
+	const float RowY = Top + (6.0f * UIScale);
+	DrawShadowedText(FString::FromInt(ValorGameState->GetTeamScore(LocalTeam)), ValorMatchHUD::AllyColor, CenterX - (100.0f * UIScale), RowY, LargeFont, 1.3f * UIScale, 0.5f);
+	DrawShadowedText(TimeText, TimeColor, CenterX, RowY, LargeFont, 1.1f * UIScale, 0.5f);
+	DrawShadowedText(FString::FromInt(ValorGameState->GetTeamScore(EnemyTeam)), ValorMatchHUD::EnemyColor, CenterX + (100.0f * UIScale), RowY, LargeFont, 1.3f * UIScale, 0.5f);
+
+	FString PhaseText;
+	switch (ValorGameState->GetRoundPhase())
+	{
+	case EValorRoundPhase::WaitingToStart: PhaseText = TEXT("WAITING FOR PLAYERS"); break;
+	case EValorRoundPhase::BuyPhase: PhaseText = FString::Printf(TEXT("ROUND %d  |  BUY PHASE (B)"), ValorGameState->GetRoundNumber()); break;
+	case EValorRoundPhase::Combat:
+	case EValorRoundPhase::RoundEnd: PhaseText = FString::Printf(TEXT("ROUND %d"), ValorGameState->GetRoundNumber()); break;
+	case EValorRoundPhase::MatchEnd: PhaseText = TEXT("MATCH OVER"); break;
+	default: break;
+	}
+
+	const EValorTeamSide LocalSide = ValorGameState->GetSideOfTeam(LocalTeam);
+	if (ValorGameState->GetRoundNumber() > 0 && LocalSide != EValorTeamSide::None)
+	{
+		PhaseText += LocalSide == EValorTeamSide::Attack ? TEXT("  |  ATTACK") : TEXT("  |  DEFENSE");
+	}
+
+	DrawShadowedText(PhaseText, FLinearColor(0.9f, 0.9f, 0.9f, 1.0f), CenterX, Top + BoxHeight - (22.0f * UIScale), SmallFont, UIScale, 0.5f);
+}
+
+void AValorHUD::DrawCredits(float UIScale)
+{
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (!ValorPlayerState || !GEngine)
+	{
+		return;
+	}
+
+	DrawShadowedText(FString::Printf(TEXT("CREDITS  %d"), ValorPlayerState->GetCredits()), FLinearColor(0.95f, 0.9f, 0.6f, 1.0f),
+		24.0f * UIScale, Canvas->ClipY - (150.0f * UIScale), GEngine->GetMediumFont(), UIScale, 0.0f);
+}
+
+void AValorHUD::DrawRoundBanner(float CenterX, float CenterY, float UIScale)
+{
+	const AValorGameState* ValorGameState = GetWorld()->GetGameState<AValorGameState>();
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (!ValorGameState || !GEngine)
+	{
+		return;
+	}
+
+	const EValorRoundPhase Phase = ValorGameState->GetRoundPhase();
+	if (Phase != EValorRoundPhase::RoundEnd && Phase != EValorRoundPhase::MatchEnd)
+	{
+		return;
+	}
+
+	const EValorTeam LocalTeam = ValorPlayerState ? ValorPlayerState->GetTeam() : EValorTeam::None;
+	FString Title;
+	FString Detail;
+	FLinearColor TitleColor = FLinearColor::White;
+
+	if (Phase == EValorRoundPhase::MatchEnd)
+	{
+		const EValorTeam MatchWinner = ValorGameState->GetMatchWinner();
+		const bool bWon = LocalTeam != EValorTeam::None && MatchWinner == LocalTeam;
+		if (LocalTeam == EValorTeam::None)
+		{
+			Title = MatchWinner == EValorTeam::TeamA ? TEXT("TEAM A WINS") : TEXT("TEAM B WINS");
+		}
+		else
+		{
+			Title = bWon ? TEXT("VICTORY") : TEXT("DEFEAT");
+		}
+		TitleColor = bWon ? ValorMatchHUD::AllyColor : ValorMatchHUD::EnemyColor;
+		const EValorTeam ShownTeam = LocalTeam != EValorTeam::None ? LocalTeam : EValorTeam::TeamA;
+		Detail = FString::Printf(TEXT("%d - %d   |   NEW MATCH IN %s"), ValorGameState->GetTeamScore(ShownTeam), ValorGameState->GetTeamScore(ValorTeams::GetOpposingTeam(ShownTeam)),
+			*ValorMatchHUD::FormatTime(ValorGameState->GetPhaseTimeRemaining()));
+	}
+	else
+	{
+		const EValorTeam Winner = ValorGameState->GetLastRoundWinner();
+		const bool bWon = LocalTeam != EValorTeam::None && Winner == LocalTeam;
+		if (LocalTeam == EValorTeam::None)
+		{
+			Title = Winner == EValorTeam::TeamA ? TEXT("TEAM A WINS THE ROUND") : TEXT("TEAM B WINS THE ROUND");
+		}
+		else
+		{
+			Title = bWon ? TEXT("ROUND WON") : TEXT("ROUND LOST");
+		}
+		TitleColor = bWon ? ValorMatchHUD::AllyColor : ValorMatchHUD::EnemyColor;
+
+		switch (ValorGameState->GetLastRoundEndReason())
+		{
+		case EValorRoundEndReason::Elimination: Detail = bWon ? TEXT("ENEMIES ELIMINATED") : TEXT("YOUR TEAM WAS ELIMINATED"); break;
+		case EValorRoundEndReason::TimeExpired: Detail = TEXT("TIME EXPIRED"); break;
+		case EValorRoundEndReason::SpikeDetonated: Detail = TEXT("SPIKE DETONATED"); break;
+		case EValorRoundEndReason::SpikeDefused: Detail = TEXT("SPIKE DEFUSED"); break;
+		default: break;
+		}
+
+		// 다음 라운드에 공수가 바뀌면 알린다(전반 끝, 연장전).
+		const int32 Round = ValorGameState->GetRoundNumber();
+		if (ValorMatchRules::GetAttackingTeam(Round + 1) != ValorMatchRules::GetAttackingTeam(Round))
+		{
+			Detail += TEXT("   |   SWITCHING SIDES");
+		}
+	}
+
+	float Y = CenterY - (150.0f * UIScale);
+	Y += DrawShadowedText(Title, TitleColor, CenterX, Y, GEngine->GetLargeFont(), 2.0f * UIScale, 0.5f);
+	Y += 6.0f * UIScale;
+	DrawShadowedText(Detail, FLinearColor::White, CenterX, Y, GEngine->GetMediumFont(), 1.1f * UIScale, 0.5f);
+}
+
+void AValorHUD::DrawBuyMenu(float CenterX, float RequestedUIScale)
+{
+	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+	const AValorGameState* ValorGameState = GetWorld()->GetGameState<AValorGameState>();
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	const AValorCharacter* Character = PlayerOwner ? Cast<AValorCharacter>(PlayerOwner->GetPawn()) : nullptr;
+	const UValorCombatComponent* CombatComponent = Character ? Character->GetCombatComponent() : nullptr;
+	if (!ValorController || !ValorController->IsBuyMenuOpen() || !ValorGameState || !ValorPlayerState || !CombatComponent || !GEngine)
+	{
+		return;
+	}
+
+	DrawRect2D(FLinearColor::Black, 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY, 0.55f);
+
+	// 열 수만큼 가로로 늘어서므로, 글자 배율이 커도 화면 너비(96%)를 넘지 않게 줄인다.
+	int32 ColumnCountForFit = 1;
+	for (const EValorWeaponCategory Category : {EValorWeaponCategory::Sidearm, EValorWeaponCategory::SMG, EValorWeaponCategory::Shotgun, EValorWeaponCategory::Rifle, EValorWeaponCategory::Sniper, EValorWeaponCategory::Heavy})
+	{
+		ColumnCountForFit += ValorGameState->GetShopWeapons().ContainsByPredicate([Category](const FValorShopWeaponEntry& Entry) { return Entry.Category == Category; }) ? 1 : 0;
+	}
+	const float BaseMenuWidth = (ColumnCountForFit * (190.0f + 12.0f)) - 12.0f;
+	const float UIScale = FMath::Min(RequestedUIScale, (Canvas->ClipX * 0.96f) / BaseMenuWidth);
+
+	UFont* MediumFont = GEngine->GetMediumFont();
+	UFont* SmallFont = GEngine->GetSmallFont();
+	const int32 Credits = ValorPlayerState->GetCredits();
+	// 위 가운데 점수판(높이 90, 점수판 배율) 바로 아래부터 그린다.
+	const float HeaderY = (96.0f * RequestedUIScale) + (6.0f * UIScale);
+	DrawShadowedText(FString::Printf(TEXT("BUY  |  CREDITS %d  |  %s LEFT  |  CLICK TO BUY, CLICK AGAIN TO SELL  |  B TO CLOSE"), Credits,
+		*ValorMatchHUD::FormatTime(ValorGameState->GetPhaseTimeRemaining())), FLinearColor(0.95f, 0.9f, 0.6f, 1.0f), CenterX, HeaderY, MediumFont, UIScale, 0.5f);
+
+	// 열: 상점에 있는 총 분류(발로란트 순서) + 실드.
+	TArray<EValorWeaponCategory> Columns;
+	for (const EValorWeaponCategory Category : {EValorWeaponCategory::Sidearm, EValorWeaponCategory::SMG, EValorWeaponCategory::Shotgun, EValorWeaponCategory::Rifle, EValorWeaponCategory::Sniper, EValorWeaponCategory::Heavy})
+	{
+		if (ValorGameState->GetShopWeapons().ContainsByPredicate([Category](const FValorShopWeaponEntry& Entry) { return Entry.Category == Category; }))
+		{
+			Columns.Add(Category);
+		}
+	}
+
+	const float ColumnWidth = 190.0f * UIScale;
+	const float ColumnGap = 12.0f * UIScale;
+	const float ItemHeight = 58.0f * UIScale;
+	const float ItemGap = 8.0f * UIScale;
+	const int32 ColumnCount = Columns.Num() + 1;
+	const float StartX = CenterX - ((((ColumnWidth + ColumnGap) * ColumnCount) - ColumnGap) * 0.5f);
+	const float StartY = HeaderY + (56.0f * UIScale);
+
+	float MouseX = -1.0f;
+	float MouseY = -1.0f;
+	PlayerOwner->GetMousePosition(MouseX, MouseY);
+
+	// 칸 하나: 배경(보유 = 아군 색, 못 사면 흐리게, 마우스 위 = 밝게), 이름, 값.
+	auto DrawItem = [&](float X, float Y, const FString& Name, int32 Cost, bool bOwned, bool bPurchasedThisRound, FName HitBoxName)
+	{
+		const bool bAffordable = Credits >= Cost;
+		const bool bHovered = MouseX >= X && MouseX <= X + ColumnWidth && MouseY >= Y && MouseY <= Y + ItemHeight;
+		FLinearColor Background = bOwned ? FLinearColor(0.1f, 0.45f, 0.4f, 1.0f) : FLinearColor(0.18f, 0.18f, 0.2f, 1.0f);
+		if (bHovered)
+		{
+			Background = Background * 1.6f;
+		}
+		DrawRect2D(Background, X, Y, ColumnWidth, ItemHeight, (bAffordable || bOwned) ? 0.9f : 0.5f);
+
+		const FLinearColor NameColor = (bAffordable || bOwned) ? FLinearColor::White : FLinearColor(0.6f, 0.6f, 0.6f, 1.0f);
+		DrawShadowedText(Name.ToUpper(), NameColor, X + (10.0f * UIScale), Y + (8.0f * UIScale), MediumFont, UIScale, 0.0f);
+
+		FString CostText = FString::FromInt(Cost);
+		if (bPurchasedThisRound)
+		{
+			CostText = TEXT("SELL  ") + CostText;
+		}
+		else if (bOwned)
+		{
+			CostText = TEXT("OWNED");
+		}
+		const FLinearColor CostColor = (bAffordable || bOwned) ? FLinearColor(0.95f, 0.9f, 0.6f, 1.0f) : ValorMatchHUD::EnemyColor;
+		DrawShadowedText(CostText, CostColor, X + ColumnWidth - (10.0f * UIScale), Y + ItemHeight - (22.0f * UIScale), SmallFont, UIScale, 1.0f);
+
+		AddHitBox(FVector2D(X, Y), FVector2D(ColumnWidth, ItemHeight), HitBoxName, true);
+	};
+
+	const TArray<FValorShopWeaponEntry>& ShopWeapons = ValorGameState->GetShopWeapons();
+	for (int32 ColumnIndex = 0; ColumnIndex < Columns.Num(); ++ColumnIndex)
+	{
+		const float X = StartX + (ColumnIndex * (ColumnWidth + ColumnGap));
+		DrawShadowedText(ValorMatchHUD::CategoryLabel(Columns[ColumnIndex]), FLinearColor(0.8f, 0.8f, 0.8f, 1.0f), X, StartY - (24.0f * UIScale), SmallFont, UIScale, 0.0f);
+
+		float Y = StartY;
+		for (int32 EntryIndex = 0; EntryIndex < ShopWeapons.Num(); ++EntryIndex)
+		{
+			const FValorShopWeaponEntry& Entry = ShopWeapons[EntryIndex];
+			if (Entry.Category != Columns[ColumnIndex])
+			{
+				continue;
+			}
+
+			const EValorWeaponSlot Slot = Entry.Category == EValorWeaponCategory::Sidearm ? EValorWeaponSlot::Secondary : EValorWeaponSlot::Primary;
+			const AValorWeaponBase* Held = CombatComponent->GetWeaponInSlot(Slot);
+			const bool bOwned = Held && Held->GetClass() == Entry.WeaponClass;
+			const bool bPurchased = bOwned && ValorPlayerState->HasPurchasedWeaponThisRound(Entry.WeaponClass);
+			DrawItem(X, Y, Entry.DisplayName, Entry.Cost, bOwned, bPurchased, FName(*FString::Printf(TEXT("BuyWeapon_%d"), EntryIndex)));
+			Y += ItemHeight + ItemGap;
+		}
+	}
+
+	// 실드 열.
+	const UAbilitySystemComponent* AbilitySystemComponent = Character->GetAbilitySystemComponent();
+	const float CurrentShield = AbilitySystemComponent ? AbilitySystemComponent->GetNumericAttribute(UValorCombatAttributeSet::GetShieldAttribute()) : 0.0f;
+	const float ShieldX = StartX + (Columns.Num() * (ColumnWidth + ColumnGap));
+	DrawShadowedText(TEXT("SHIELDS"), FLinearColor(0.8f, 0.8f, 0.8f, 1.0f), ShieldX, StartY - (24.0f * UIScale), SmallFont, UIScale, 0.0f);
+	const TArray<FValorShieldOffer>& Shields = ValorGameState->GetShopShields();
+	for (int32 ShieldIndex = 0; ShieldIndex < Shields.Num(); ++ShieldIndex)
+	{
+		const bool bPurchased = ValorPlayerState->HasPurchasedShieldThisRound(ShieldIndex);
+		const bool bOwned = bPurchased || CurrentShield >= Shields[ShieldIndex].ShieldAmount;
+		DrawItem(ShieldX, StartY + (ShieldIndex * (ItemHeight + ItemGap)), FString::Printf(TEXT("%s %.0f"), *Shields[ShieldIndex].DisplayName, Shields[ShieldIndex].ShieldAmount),
+			Shields[ShieldIndex].Cost, bOwned, bPurchased, FName(*FString::Printf(TEXT("BuyShield_%d"), ShieldIndex)));
+	}
+}
+
+void AValorHUD::NotifyHitBoxClick(FName BoxName)
+{
+	Super::NotifyHitBoxClick(BoxName);
+
+	AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+	const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (!ValorController || !ValorController->IsBuyMenuOpen() || !ValorGameState || !ValorPlayerState)
+	{
+		return;
+	}
+
+	const FString Name = BoxName.ToString();
+	int32 Index = INDEX_NONE;
+	if (Name.StartsWith(TEXT("BuyWeapon_")) && LexTryParseString(Index, *Name.RightChop(10)) && ValorGameState->GetShopWeapons().IsValidIndex(Index))
+	{
+		const TSubclassOf<AValorWeaponBase> WeaponClass = ValorGameState->GetShopWeapons()[Index].WeaponClass;
+		if (ValorPlayerState->HasPurchasedWeaponThisRound(WeaponClass))
+		{
+			ValorController->ServerSellWeapon(WeaponClass);
+		}
+		else
+		{
+			ValorController->ServerBuyWeapon(WeaponClass);
+		}
+	}
+	else if (Name.StartsWith(TEXT("BuyShield_")) && LexTryParseString(Index, *Name.RightChop(10)) && ValorGameState->GetShopShields().IsValidIndex(Index))
+	{
+		if (ValorPlayerState->HasPurchasedShieldThisRound(Index))
+		{
+			ValorController->ServerSellShield(Index);
+		}
+		else
+		{
+			ValorController->ServerBuyShield(Index);
+		}
 	}
 }

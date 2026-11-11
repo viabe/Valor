@@ -278,7 +278,8 @@ void AValorCharacter::HandleCrouchInputReleased()
 
 void AValorCharacter::HandleFireInputPressed()
 {
-	if (CombatComponent)
+	// 구매 메뉴가 열려 있으면 왼쪽 클릭은 메뉴 칸을 고르는 데만 쓴다(총을 쏘지 않는다).
+	if (CombatComponent && !IsBuyMenuOpen())
 	{
 		CombatComponent->HandleFireInputPressed();
 	}
@@ -302,10 +303,16 @@ void AValorCharacter::HandleReloadInputPressed()
 
 void AValorCharacter::HandleADSInputPressed()
 {
-	if (CombatComponent)
+	if (CombatComponent && !IsBuyMenuOpen())
 	{
 		CombatComponent->HandleADSInputPressed();
 	}
+}
+
+bool AValorCharacter::IsBuyMenuOpen() const
+{
+	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(GetController());
+	return ValorController && ValorController->IsBuyMenuOpen();
 }
 
 void AValorCharacter::HandleADSInputReleased()
