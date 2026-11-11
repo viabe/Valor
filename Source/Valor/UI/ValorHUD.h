@@ -113,17 +113,17 @@ protected:
 
 	// 명중 표시 유지 시간(초). 처치는 더 오래 보여 준다.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.05"))
-	float HitMarkerDuration = 0.25f;
+	float HitMarkerDuration = 0.3f;
 
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.05"))
 	float KillHitMarkerDuration = 0.5f;
 
 	// 히트마커 대각선 길이와 중앙 빈틈(1080p 기준 픽셀).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
-	float HitMarkerLength = 7.0f;
+	float HitMarkerLength = 12.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
-	float HitMarkerGap = 7.0f;
+	float HitMarkerGap = 10.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
 	FLinearColor BodyHitColor = FLinearColor(1.0f, 1.0f, 1.0f, 1.0f);

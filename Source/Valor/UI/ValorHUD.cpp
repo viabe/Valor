@@ -323,9 +323,11 @@ void AValorHUD::DrawHitMarker(float CenterX, float CenterY, float UIScale)
 	FLinearColor Color = HitConfirm.bKilled ? KillHitColor : (HitConfirm.HitZone == EValorHitZone::Head ? HeadHitColor : BodyHitColor);
 	Color.A *= 1.0f - (Age / Duration);
 
-	const float Gap = HitMarkerGap * UIScale;
-	const float Length = HitMarkerLength * UIScale * (HitConfirm.bKilled ? 1.4f : 1.0f);
-	const float Thickness = FMath::Max(1.5f, 2.0f * UIScale);
+	// 작은 창(PIE 등)에서 1080p 기준 크기를 그대로 줄이면 3~4px로 크로스헤어 안에 묻혀 보이지 않는다. 1080p의 75% 밑으로는 줄이지 않는다.
+	const float MarkerScale = FMath::Max(UIScale, 0.75f);
+	const float Gap = HitMarkerGap * MarkerScale;
+	const float Length = HitMarkerLength * MarkerScale * (HitConfirm.bKilled ? 1.4f : 1.0f);
+	const float Thickness = FMath::Max(2.0f, 2.5f * MarkerScale);
 	const float Diagonal = UE_INV_SQRT_2;
 	const FVector2D Directions[] = {FVector2D(-1.0, -1.0), FVector2D(1.0, -1.0), FVector2D(-1.0, 1.0), FVector2D(1.0, 1.0)};
 	for (const FVector2D& Direction : Directions)

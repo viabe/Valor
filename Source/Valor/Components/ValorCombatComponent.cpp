@@ -474,20 +474,19 @@ void UValorCombatComponent::PredictLocalShot(const FValorShotRequest& Request)
 	FRotator IgnoredViewRotation = FRotator::ZeroRotator;
 	OwnerCharacter->GetWeaponViewPoint(TraceStart, IgnoredViewRotation);
 
-	// 연출용 로컬 트레이스(피해 판정 아님). 서버와 같은 방향(같은 시드의 펠릿)이라 벽 탄흔 위치는 서버 결과와 거의 항상 일치한다.
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ValorPredictedShotTrace), false, OwnerCharacter);
-	QueryParams.AddIgnoredActor(EquippedWeapon);
-
+	// 연출용 예측 판정(피해 없음). 서버와 같은 방향(같은 시드의 펠릿)·같은 판정 함수를 쓰고, 되감기만 하지 않는다.
+	// 예전에는 Visibility 채널 트레이스를 썼는데, 캐릭터 캡슐(Pawn)·메시(CharacterMesh)가 Visibility를 무시해서
+	// 사수 화면에서는 탄이 적을 뚫고 뒤 바닥·벽에 탄흔을 남겼다(서버 피해는 정상).
 	FValorShotEffects ShotEffects;
 	TraceShot(Request, ShotData, bAltMode, PelletCount, TraceStart, ShotEffects,
-		[World, &QueryParams](const FVector& RayStart, const FVector& RayDirection, float MaxDistance, float /*DamageDistanceOffset*/, FValorShotImpact& OutImpact)
+		[this](const FVector& RayStart, const FVector& RayDirection, float MaxDistance, float /*DamageDistanceOffset*/, FValorShotImpact& OutImpact)
 		{
-			const FVector RayEnd = RayStart + (RayDirection * MaxDistance);
-			FHitResult Hit;
-			OutImpact.bBlockingHit = World->LineTraceSingleByChannel(Hit, RayStart, RayEnd, ECC_Visibility, QueryParams);
-			OutImpact.bHitCharacter = OutImpact.bBlockingHit && Cast<AValorCharacter>(Hit.GetActor()) != nullptr;
-			OutImpact.ImpactPoint = OutImpact.bBlockingHit ? FVector(Hit.ImpactPoint) : RayEnd;
-			OutImpact.ImpactNormal = OutImpact.bBlockingHit ? FVector(Hit.ImpactNormal) : -RayDirection;
+			FValorHitScanResult HitResult;
+			PerformHitScan(RayStart, RayDirection, MaxDistance, 0.0f, false, HitResult);
+			OutImpact.ImpactPoint = HitResult.ImpactPoint;
+			OutImpact.ImpactNormal = HitResult.ImpactNormal;
+			OutImpact.bBlockingHit = HitResult.bBlockingHit || HitResult.HitCharacter != nullptr;
+			OutImpact.bHitCharacter = HitResult.HitCharacter != nullptr;
 			return OutImpact.bBlockingHit;
 		});
 
@@ -597,7 +596,7 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 		[this, ShotTime, &DamageByTarget](const FVector& RayStart, const FVector& RayDirection, float MaxDistance, float DamageDistanceOffset, FValorShotImpact& OutImpact)
 		{
 			FValorHitScanResult HitResult;
-			PerformServerHitScan(RayStart, RayDirection, MaxDistance, ShotTime, HitResult);
+			PerformHitScan(RayStart, RayDirection, MaxDistance, ShotTime, true, HitResult);
 
 			if (HitResult.HitCharacter)
 			{
@@ -782,6 +781,7 @@ void UValorCombatComponent::PlayLocalShotPresentation(const FValorShotEffects& S
 		LastFireSimulationWorldTime = static_cast<float>(World->GetTimeSeconds());
 	}
 
+	LastLocalShotEffects = ShotEffects;
 	if (!EquippedWeapon)
 	{
 		return;
@@ -1767,7 +1767,7 @@ AValorWeaponPickup* UValorCombatComponent::FindPickupInView() const
 	return nullptr;
 }
 
-void UValorCombatComponent::PerformServerHitScan(const FVector& TraceStart, const FVector& ShotDirection, float MaxDistance, float ClientShotTimestampSeconds, FValorHitScanResult& OutResult) const
+void UValorCombatComponent::PerformHitScan(const FVector& TraceStart, const FVector& ShotDirection, float MaxDistance, float ClientShotTimestampSeconds, bool bRewindToShotTime, FValorHitScanResult& OutResult) const
 {
 	const FVector TraceEnd = TraceStart + (ShotDirection * MaxDistance);
 
@@ -1824,9 +1824,12 @@ void UValorCombatComponent::PerformServerHitScan(const FVector& TraceStart, cons
 			continue;
 		}
 
-		// 발사 시각의 히트박스 스냅샷으로 판정한다(서버 되감기).
+		// 서버: 발사 시각의 히트박스 스냅샷으로 판정한다(되감기). 예측: 사수 화면에 지금 보이는 자세로 판정한다.
 		FValorLagCompHitResult CandidateHit;
-		if (!LagCompComponent->ConfirmHitAtTime(TraceStart, ShotDirection, MaxDistance, ClientShotTimestampSeconds, CandidateHit))
+		const bool bCandidateHit = bRewindToShotTime
+			? LagCompComponent->ConfirmHitAtTime(TraceStart, ShotDirection, MaxDistance, ClientShotTimestampSeconds, CandidateHit)
+			: LagCompComponent->ConfirmHitAtCurrentPose(TraceStart, ShotDirection, MaxDistance, CandidateHit);
+		if (!bCandidateHit)
 		{
 			continue;
 		}

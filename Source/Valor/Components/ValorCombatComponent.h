@@ -153,6 +153,9 @@ public:
 	bool IsFireInputHeld() const { return bLocalFireHeld || bLocalAltFireHeld; }
 	float GetLastFireSimulationWorldTime() const { return LastFireSimulationWorldTime; }
 
+	// 이 머신의 사수 화면에 마지막으로 그린 발사(예측 클라는 예측 결과, 리슨 호스트는 서버 결과). 탄착이 캐릭터에 맞았는지 확인용.
+	const FValorShotEffects& GetLastLocalShotEffects() const { return LastLocalShotEffects; }
+
 	// === UI(UMG 위젯)에서 읽는 값: 로컬 플레이어 기준 ===
 
 	// 탄창/예비 탄약. 소유 클라는 서버 복제를 기다리지 않도록 "예측 탄약"(비행 중인 발 제외)을 돌려준다.
@@ -432,7 +435,10 @@ private:
 	// 서버 전용: 한 대상에게 이번 발의 피해를 GAS 피해 GE로 적용한다(사수/무기/발사 위치/부위를 스펙에 싣는다).
 	void ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin);
 
-	void PerformServerHitScan(const FVector& TraceStart, const FVector& ShotDirection, float MaxDistance, float ClientShotTimestampSeconds, FValorHitScanResult& OutResult) const;
+	// 한 줄기 히트스캔: 벽은 월드 트레이스(캐릭터 무시), 캐릭터는 판정 상자(UValorLagCompensationComponent)로 본다.
+	// 서버(bRewindToShotTime = true)는 발사 시각으로 되감은 자세, 사수 클라의 예측(false)은 지금 보이는 자세로 판정한다.
+	// 같은 함수를 써야 사수 화면의 탄착·명중 연출이 서버 판정과 어긋나지 않는다.
+	void PerformHitScan(const FVector& TraceStart, const FVector& ShotDirection, float MaxDistance, float ClientShotTimestampSeconds, bool bRewindToShotTime, FValorHitScanResult& OutResult) const;
 
 	UPROPERTY()
 	TObjectPtr<AValorCharacter> OwnerCharacter;
@@ -500,4 +506,6 @@ private:
 
 	// 애니메이션 인스턴스가 발사 몽타주 타이밍을 잡는 기준(로컬 월드 시간).
 	float LastFireSimulationWorldTime = -1000.0f;
+
+	FValorShotEffects LastLocalShotEffects;
 };

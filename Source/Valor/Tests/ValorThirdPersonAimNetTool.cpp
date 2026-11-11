@@ -8,6 +8,7 @@
 #include "HAL/PlatformTime.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
+#include "Player/ValorPlayerController.h"
 #include "ShaderCompiler.h"
 #include "UnrealClient.h"
 #include "ValorCharacter.h"
@@ -29,13 +30,16 @@
 //     -ExecCmds="Automation RunTests Valor.Tools.ThirdPersonAimNet.Client; Quit"
 // =====================================================================================================
 
-namespace
+// 유니티 빌드에서 다른 파일의 이름(DistanceCm 등)과 겹치지 않도록 이름 있는 네임스페이스에 둔다.
+namespace ValorAimNetTool
 {
 	constexpr float DistanceCm = 300.0f;
 	// 클라 프로세스는 접속 후 약 10초 뒤에야 테스트(겨누기)를 시작한다. 호스트는 그 뒤에 재야 클라의 실제 조준을 본다.
 	constexpr double ClientMeasureStartSeconds = 8.0;
 	constexpr double HostMeasureStartSeconds = 22.0;
 	constexpr double MeasureDurationSeconds = 3.0;
+	// 클라가 몸통을 겨누기 시작하는 시각. 호스트 측정이 끝난 뒤여야 한다(클라는 호스트보다 늦게 짝을 찾으므로 충분하다).
+	constexpr double FireAimSeconds = HostMeasureStartSeconds + MeasureDurationSeconds + 1.0;
 
 	UWorld* FindGameWorld()
 	{
@@ -121,6 +125,12 @@ namespace
 				}
 			}
 
+			// 마지막 탄(머리)은 상대를 처치하므로, 상대가 살아 있는 목록에서 빠진 뒤에도 그 탄의 명중 확인 결과는 끝까지 본다.
+			if (Local && !Other && !bHost && FireWorldTime >= 0.0)
+			{
+				return UpdateFireCheck(*Local, Now - PairFoundTime);
+			}
+
 			if (!Local || !Other)
 			{
 				// 다 잰 뒤 상대 프로세스가 먼저 끝나면 그대로 끝낸다.
@@ -159,11 +169,20 @@ namespace
 				}
 			}
 
-			// 상대의 보이는 머리를 겨눈다. 컨트롤 회전은 이동 패킷으로 서버에 가고, 서버가 다시 복제 피치로 다른 머신에 보낸다.
-			const FVector MyView = GetViewLocation(*Local);
-			PlayerController->SetControlRotation((GetVisibleHeadLocation(*Other) - MyView).Rotation());
-
 			const double Elapsed = Now - PairFoundTime;
+
+			// 상대의 보이는 머리를 겨눈다. 컨트롤 회전은 이동 패킷으로 서버에 가고, 서버가 다시 복제 피치로 다른 머신에 보낸다.
+			// 클라는 호스트가 다 잰 뒤 두 발을 쏜다(예측 탄착·서버 명중 확인·부위 확인): 몸통 중심, 그다음 보이는 머리 윗부분.
+			const bool bFirePhase = !bHost && Elapsed >= FireAimSeconds;
+			const FVector MyView = GetViewLocation(*Local);
+			const FVector AimTarget = bFirePhase ? GetFireTarget(*Other) : GetVisibleHeadLocation(*Other);
+			PlayerController->SetControlRotation((AimTarget - MyView).Rotation());
+
+			if (bFirePhase)
+			{
+				return UpdateFireCheck(*Local, Elapsed);
+			}
+
 			const double MeasureStart = bHost ? HostMeasureStartSeconds : ClientMeasureStartSeconds;
 			const double MeasureEnd = MeasureStart + MeasureDurationSeconds;
 			if (Elapsed >= MeasureStart && Elapsed < MeasureEnd && Now >= NextSampleTime)
@@ -179,11 +198,71 @@ namespace
 				Report(*Local, *Other);
 			}
 
-			// 클라는 호스트가 다 잴 때까지 계속 겨누고 있어야 한다(클라가 먼저 끝나면 호스트가 상대의 조준을 잃는다).
-			return Elapsed >= (bHost ? MeasureEnd + 1.0 : HostMeasureStartSeconds + MeasureDurationSeconds + 6.0);
+			// 호스트는 클라가 사격 확인까지 마치고 나갈 때까지 기다린다(상대가 사라지면 위에서 끝난다).
+			return bHost && Elapsed >= 90.0;
 		}
 
 	private:
+		// 사격 확인 순서. 몸통(40 피해) 뒤 머리(160 피해, 실드 포함 150을 넘어 처치)라 머리는 마지막이어야 한다.
+		// 머리 윗부분(보이는 머리 중심 + 6cm)은 뼈 판정 전 고정 상자에서 빗나가던 곳이다.
+		struct FFireShot
+		{
+			const TCHAR* Label;
+			EValorHitZone ExpectedZone;
+		};
+		static constexpr int32 NumFireShots = 2;
+		static const FFireShot& GetFireShot(int32 Index)
+		{
+			static const FFireShot Shots[NumFireShots] = {{TEXT("body"), EValorHitZone::Body}, {TEXT("head-top"), EValorHitZone::Head}};
+			return Shots[Index];
+		}
+
+		FVector GetFireTarget(const AValorCharacter& Other) const
+		{
+			return FireShotIndex == 0 ? Other.GetActorLocation() + FVector(0.0f, 0.0f, 20.0f) : GetVisibleHeadLocation(Other) + FVector(0.0f, 0.0f, 6.0f);
+		}
+
+		// 클라: 겨눈 뒤 0.5초 기다려(반동 회복·조준 복제) 한 발 쏘고, 예측 탄착이 캐릭터에 맞았는지, 서버 명중 확인(히트마커)이 왔는지,
+		// 서버가 정한 부위가 기대와 같은지 본다.
+		bool UpdateFireCheck(AValorCharacter& Local, double Elapsed)
+		{
+			UWorld* World = Local.GetWorld();
+			const AValorPlayerController* ValorController = Cast<AValorPlayerController>(Local.GetController());
+			if (FireWorldTime < 0.0)
+			{
+				if (Elapsed < FireAimSeconds + 0.5 + (FireShotIndex * 1.5))
+				{
+					return false;
+				}
+
+				FireWorldTime = World->GetTimeSeconds();
+				Local.HandleFireInputPressed();
+				Local.HandleFireInputReleased();
+				return false;
+			}
+
+			const bool bConfirmed = ValorController && ValorController->GetLastHitConfirmTime() >= FireWorldTime;
+			if (!bConfirmed && World->GetTimeSeconds() - FireWorldTime < 1.0)
+			{
+				return false;
+			}
+
+			const FFireShot& Shot = GetFireShot(FireShotIndex);
+			const FValorShotEffects& Predicted = Local.GetCombatComponent()->GetLastLocalShotEffects();
+			const bool bPredictedHit = Predicted.Impacts.Num() > 0 && Predicted.Impacts[0].bHitCharacter;
+			const EValorHitZone Zone = bConfirmed ? ValorController->GetLastHitConfirm().HitZone : EValorHitZone::None;
+			Test->AddInfo(FString::Printf(TEXT("TPNET Client fire %s: predictedHitCharacter=%d serverConfirm=%d zone=%d(expected %d) damage=%.0f"),
+				Shot.Label, bPredictedHit ? 1 : 0, bConfirmed ? 1 : 0, static_cast<int32>(Zone), static_cast<int32>(Shot.ExpectedZone),
+				bConfirmed ? ValorController->GetLastHitConfirm().Damage : 0.0f));
+			if (!bPredictedHit || !bConfirmed || Zone != Shot.ExpectedZone)
+			{
+				Test->AddError(FString::Printf(TEXT("TPNET Client fire %s: 예측 탄착, 서버 명중 확인, 부위 중 하나가 기대와 다릅니다."), Shot.Label));
+			}
+
+			FireWorldTime = -1.0;
+			return ++FireShotIndex >= NumFireShots;
+		}
+
 		void Sample(const AValorCharacter& Local, const AValorCharacter& Other, const FVector& MyView)
 		{
 			const AValorWeaponBase* OtherWeapon = Other.GetCombatComponent() ? Other.GetCombatComponent()->GetEquippedWeapon() : nullptr;
@@ -260,20 +339,22 @@ namespace
 		double PairFoundTime = -1.0;
 		double NextSampleTime = 0.0;
 		bool bReported = false;
+		double FireWorldTime = -1.0;
+		int32 FireShotIndex = 0;
 	};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FValorThirdPersonAimNetHostTool, "Valor.Tools.ThirdPersonAimNet.Host", EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
 bool FValorThirdPersonAimNetHostTool::RunTest(const FString& Parameters)
 {
-	ADD_LATENT_AUTOMATION_COMMAND(FValorThirdPersonAimNetCommand(this, true));
+	ADD_LATENT_AUTOMATION_COMMAND(ValorAimNetTool::FValorThirdPersonAimNetCommand(this, true));
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FValorThirdPersonAimNetClientTool, "Valor.Tools.ThirdPersonAimNet.Client", EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
 bool FValorThirdPersonAimNetClientTool::RunTest(const FString& Parameters)
 {
-	ADD_LATENT_AUTOMATION_COMMAND(FValorThirdPersonAimNetCommand(this, false));
+	ADD_LATENT_AUTOMATION_COMMAND(ValorAimNetTool::FValorThirdPersonAimNetCommand(this, false));
 	return true;
 }
 
