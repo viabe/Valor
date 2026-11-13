@@ -48,6 +48,9 @@ public:
 	// 개발용: 지금 단계를 바로 끝낸다(단계 타이머가 끝난 것과 같다).
 	void DebugSkipPhase();
 
+	// 개발용: 봇(허수아비) 한 명을 팀에 넣는다(None이면 인원이 적은 팀). 대기·구매 단계면 바로 스폰, 아니면 다음 라운드.
+	void AddBot(EValorTeam Team);
+
 	// === 스파이크(서버, AValorSpike가 부른다) ===
 	// 설치: 교전 → 설치 단계(폭발까지 SpikeDetonationSeconds), 공격 팀 전원 +PlantBonus.
 	void HandleSpikePlanted(class AValorCharacter* Planter);
@@ -190,4 +193,6 @@ private:
 
 	TArray<FTransform> AttackSpawnBases;
 	TArray<FTransform> DefenseSpawnBases;
+
+	int32 BotCount = 0;
 };

@@ -118,6 +118,29 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerDebugSkipPhase();
 
+	// ValorAddBot [A|B]: 봇(허수아비)을 팀에 넣는다(생략하면 인원이 적은 팀).
+	UFUNCTION(Exec)
+	void ValorAddBot(const FString& Team);
+
+	// ValorKillMe: 내 캐릭터를 즉사시킨다(관전 확인용).
+	UFUNCTION(Exec)
+	void ValorKillMe();
+
+	UFUNCTION(Server, Reliable)
+	void ServerDebugAddBot(uint8 Team);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDebugKillMe();
+
+	// === 관전(로컬 화면 전용) ===
+	// 경기 모드에서 죽으면 DeathCamSeconds 동안 시체 시점을 보여 준 뒤 살아 있는 아군 뒤 3인칭 카메라로 넘어간다.
+	// 왼쪽 클릭 = 다음 아군, 오른쪽 클릭 = 이전 아군. 보던 아군이 죽으면 다음 아군으로, 아군이 없으면 시체 시점으로 돌아간다.
+	// 네트워크: 카메라는 이 화면에만 있으면 되므로 복제하지 않는다. 아군 위치·시선(조준 피치)은 이미 복제되는 캐릭터 값을 쓴다.
+	bool IsSpectating() const { return SpectateTarget.IsValid(); }
+	class AValorCharacter* GetSpectateTarget() const { return SpectateTarget.Get(); }
+	void SpectateNext();
+	void SpectatePrevious();
+
 	// === HUD가 읽는 값(로컬 월드 시간 기준) ===
 	const FValorHitConfirm& GetLastHitConfirm() const { return LastHitConfirm; }
 	double GetLastHitConfirmTime() const { return LastHitConfirmTime; }
@@ -139,6 +162,17 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback")
 	TObjectPtr<USoundBase> KillConfirmSound;
 
+	// 죽은 뒤 관전으로 넘어가기 전 시체 시점 시간(초).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Spectate", meta=(ClampMin="0.0"))
+	float DeathCamSeconds = 2.0f;
+
+	// 관전 카메라: 아군 눈 뒤로 이만큼, 오른쪽으로 ShoulderOffset만큼(어깨 너머 시점).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Spectate", meta=(ClampMin="50.0"))
+	float SpectateArmLength = 230.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Spectate")
+	float SpectateShoulderOffset = 40.0f;
+
 	// 동시에 기억할 피격 방향 표시 수. 오래된 것부터 버린다.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="1"))
 	int32 MaxDamageIndicators = 8;
@@ -156,6 +190,21 @@ private:
 	bool bHasDeathInfo = false;
 
 	bool bBuyMenuOpen = false;
+
+	// 관전
+	void CycleSpectate(int32 Direction);
+	void SetSpectateTarget(class AValorCharacter* NewTarget);
+	void StopSpectating();
+	void UpdateSpectateCamera(float DeltaTime, bool bSnap);
+	void GetSpectateCandidates(TArray<class AValorCharacter*>& OutCandidates) const;
+
+	TWeakObjectPtr<class AValorCharacter> SpectateTarget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class ACameraActor> SpectateCamera;
+
+	// 관전을 시작할 로컬 시각(죽은 뒤 DeathCamSeconds). 음수면 예약 없음.
+	double SpectateStartTime = -1.0;
 
 	double GetLocalTime() const;
 	void ClearDeathFeedback();

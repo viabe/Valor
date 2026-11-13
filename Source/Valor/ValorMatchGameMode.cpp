@@ -8,6 +8,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
 #include "Kismet/GameplayStatics.h"
+#include "Player/ValorBotController.h"
 #include "Player/ValorPlayerController.h"
 #include "Player/ValorPlayerState.h"
 #include "TimerManager.h"
@@ -212,6 +213,44 @@ void AValorMatchGameMode::SetPhase(EValorRoundPhase NewPhase, float DurationSeco
 	if (DurationSeconds > 0.0f)
 	{
 		TimerManager.SetTimer(PhaseTimerHandle, this, &AValorMatchGameMode::HandlePhaseTimerExpired, DurationSeconds, false);
+	}
+}
+
+void AValorMatchGameMode::AddBot(EValorTeam Team)
+{
+	UWorld* World = GetWorld();
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AValorBotController* Bot = World->SpawnActor<AValorBotController>(AValorBotController::StaticClass(), FTransform::Identity, SpawnParameters);
+	AValorPlayerState* PlayerState = Bot ? Bot->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (!PlayerState)
+	{
+		if (Bot)
+		{
+			Bot->Destroy();
+		}
+		return;
+	}
+
+	if (Team == EValorTeam::None)
+	{
+		Team = PickTeamForNewPlayer(CountPlayers(EValorTeam::TeamA), CountPlayers(EValorTeam::TeamB));
+	}
+	PlayerState->SetIsABot(true);
+	PlayerState->SetPlayerName(FString::Printf(TEXT("Bot %d"), ++BotCount));
+	PlayerState->SetTeam(Team);
+	PlayerState->SetCredits(ValorMatchEconomy::GetEconomyResetCredits(GetValorGameState(), StartingCredits));
+	UE_LOG(LogValorMatch, Log, TEXT("%s 추가 → %s"), *PlayerState->GetPlayerName(), Team == EValorTeam::TeamA ? TEXT("TeamA") : TEXT("TeamB"));
+
+	if (CurrentPhase == EValorRoundPhase::WaitingToStart || CurrentPhase == EValorRoundPhase::BuyPhase)
+	{
+		RebuildSpawnBases();
+		SpawnForRound(Bot, CountPlayers(Team) - 1, false);
+		if (CurrentPhase == EValorRoundPhase::BuyPhase)
+		{
+			// 이번 라운드 전멸 판정에 넣는다.
+			(Team == EValorTeam::TeamA ? bTeamAHadPlayers : bTeamBHadPlayers) = true;
+		}
 	}
 }
 

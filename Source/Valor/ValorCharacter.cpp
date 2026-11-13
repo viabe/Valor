@@ -278,6 +278,16 @@ void AValorCharacter::HandleCrouchInputReleased()
 
 void AValorCharacter::HandleFireInputPressed()
 {
+	// 죽은 뒤(라운드제 관전): 왼쪽 클릭 = 다음 아군.
+	if (!IsAlive())
+	{
+		if (AValorPlayerController* ValorController = Cast<AValorPlayerController>(GetController()))
+		{
+			ValorController->SpectateNext();
+		}
+		return;
+	}
+
 	// 구매 메뉴가 열려 있으면 왼쪽 클릭은 메뉴 칸을 고르는 데만 쓴다(총을 쏘지 않는다).
 	if (CombatComponent && !IsBuyMenuOpen())
 	{
@@ -303,6 +313,16 @@ void AValorCharacter::HandleReloadInputPressed()
 
 void AValorCharacter::HandleADSInputPressed()
 {
+	// 죽은 뒤(라운드제 관전): 오른쪽 클릭 = 이전 아군.
+	if (!IsAlive())
+	{
+		if (AValorPlayerController* ValorController = Cast<AValorPlayerController>(GetController()))
+		{
+			ValorController->SpectatePrevious();
+		}
+		return;
+	}
+
 	if (CombatComponent && !IsBuyMenuOpen())
 	{
 		CombatComponent->HandleADSInputPressed();

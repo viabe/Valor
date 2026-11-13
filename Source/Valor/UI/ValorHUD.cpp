@@ -670,6 +670,22 @@ void AValorHUD::DrawDeathOverlay(float CenterX, float CenterY, float UIScale)
 		return;
 	}
 
+	// 관전 중: 화면을 어둡게 덮지 않고 아래쪽에 누구를 보는지만 띄운다.
+	const AValorPlayerController* SpectatingController = Cast<AValorPlayerController>(PlayerOwner);
+	if (SpectatingController && SpectatingController->IsSpectating())
+	{
+		const AValorCharacter* Target = SpectatingController->GetSpectateTarget();
+		const UAbilitySystemComponent* TargetAbilitySystem = Target ? Target->GetAbilitySystemComponent() : nullptr;
+		const float TargetHealth = TargetAbilitySystem ? TargetAbilitySystem->GetNumericAttribute(UValorCombatAttributeSet::GetHealthAttribute()) : 0.0f;
+		const FString TargetName = Target && Target->GetPlayerState() ? Target->GetPlayerState()->GetPlayerName() : FString(TEXT("?"));
+		const float BannerY = Canvas->ClipY - (115.0f * UIScale);
+		DrawRect2D(FLinearColor::Black, CenterX - (260.0f * UIScale), BannerY - (8.0f * UIScale), 520.0f * UIScale, 70.0f * UIScale, 0.45f);
+		float Y = BannerY;
+		Y += DrawShadowedText(FString::Printf(TEXT("SPECTATING  %s  (%.0f HP)"), *TargetName, TargetHealth), FLinearColor(0.35f, 0.95f, 0.8f, 1.0f), CenterX, Y, GEngine->GetMediumFont(), 1.2f * UIScale, 0.5f);
+		DrawShadowedText(TEXT("LEFT CLICK: NEXT   |   RIGHT CLICK: PREVIOUS"), FLinearColor(0.85f, 0.85f, 0.85f, 1.0f), CenterX, Y + (4.0f * UIScale), GEngine->GetSmallFont(), UIScale, 0.5f);
+		return;
+	}
+
 	DrawRect2D(FLinearColor::Black, 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY, 0.35f);
 
 	FString Title = TEXT("YOU DIED");
