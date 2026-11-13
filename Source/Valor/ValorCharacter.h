@@ -160,6 +160,13 @@ public:
 
 	// 로컬 컨트롤러의 구매 메뉴가 열려 있나(열려 있으면 사격·조준 입력을 무시한다).
 	bool IsBuyMenuOpen() const;
+
+	// 스파이크 사용(4 키 홀드): 이동 예측 플래그를 켜고 끈다. 설치·해체 판정은 서버 스파이크가 한다.
+	void HandleSpikeInputPressed();
+	void HandleSpikeInputReleased();
+
+	// 서버 전용: 환경 원인(스파이크 폭발 등)으로 즉사시킨다. 킬피드에는 처치자 없이 나온다.
+	void KillByEnvironment(AActor* Causer);
 	void HandleFireInputReleased();
 	void HandleReloadInputPressed();
 	void HandleADSInputPressed();

@@ -309,6 +309,46 @@ void AValorCharacter::HandleADSInputPressed()
 	}
 }
 
+void AValorCharacter::HandleSpikeInputPressed()
+{
+	if (UValorCharacterMovementComponent* Movement = GetValorMovement())
+	{
+		Movement->SetWantsToUseSpike(true);
+	}
+}
+
+void AValorCharacter::HandleSpikeInputReleased()
+{
+	if (UValorCharacterMovementComponent* Movement = GetValorMovement())
+	{
+		Movement->SetWantsToUseSpike(false);
+	}
+}
+
+void AValorCharacter::KillByEnvironment(AActor* Causer)
+{
+	if (!HasAuthority() || !IsAlive())
+	{
+		return;
+	}
+
+	// 체력·실드를 0으로 두고 사망을 확정한다(피해 GE를 거치지 않는 즉사. 처치자 없음 = 킬피드 환경 피해).
+	if (AbilitySystemComponent)
+	{
+		AbilitySystemComponent->SetNumericAttributeBase(UValorCombatAttributeSet::GetShieldAttribute(), 0.0f);
+		AbilitySystemComponent->SetNumericAttributeBase(UValorCombatAttributeSet::GetHealthAttribute(), 0.0f);
+	}
+
+	FValorDamageEvent KillingEvent;
+	KillingEvent.DamageCauser = Causer;
+	if (Causer)
+	{
+		KillingEvent.Origin = Causer->GetActorLocation();
+		KillingEvent.bHasOrigin = true;
+	}
+	Die(KillingEvent);
+}
+
 bool AValorCharacter::IsBuyMenuOpen() const
 {
 	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(GetController());

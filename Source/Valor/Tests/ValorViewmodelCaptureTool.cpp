@@ -20,7 +20,7 @@
 // 구도·조준선 정렬을 한 번에 비교할 때 쓴다. 마지막에 내 앞에 캐릭터를 하나 세워 3인칭 손에 든 총도 찍는다.
 // 저장 위치: Saved/ViewmodelCapture/<총>_hip.png, <총>_ads.png, Knife_hip.png, TP_<총>.png.
 // 실행(에디터를 닫을 필요 없음):
-//   UnrealEditor.exe Valor.uproject /Game/Maps/ThridPersonExampleMap -game -windowed -ResX=1280 -ResY=720
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=DM" -game -windowed -ResX=1280 -ResY=720
 //     -ExecCmds="Automation RunTests Valor.Tools.ViewmodelCapture; Quit"
 // ClientContext 전용이라 에디터의 "Valor." 테스트 묶음에는 들어가지 않는다(GiveWeapon은 단독 실행의 서버 권한이 필요하다).
 // =====================================================================================================

@@ -42,6 +42,7 @@ public:
 	virtual void PrepMoveFor(ACharacter* C) override;
 
 	bool bSavedWantsToWalk = false;
+	bool bSavedWantsToUseSpike = false;
 	uint8 SavedEquipSpeedQuantized = 255;
 };
 
@@ -111,6 +112,11 @@ public:
 	void SetWantsToWalk(bool bNewWantsToWalk) { bWantsToWalk = bNewWantsToWalk; }
 	bool WantsToWalk() const { return bWantsToWalk; }
 
+	// 스파이크 사용(4 키 홀드) 의도. 압축 플래그(FLAG_Custom_1)로 이동마다 실려 서버로 간다.
+	// 지금 설치·해체할 수 있으면(AValorSpike::CanBeUsedBy) 서버와 소유 클라가 같이 이동을 0으로 묶는다.
+	void SetWantsToUseSpike(bool bNewWantsToUseSpike) { bWantsToUseSpike = bNewWantsToUseSpike; }
+	bool WantsToUseSpike() const { return bWantsToUseSpike; }
+
 	// 이번 이동에 쓰는 장비 속도 배율(양자화된 값).
 	uint8 GetEquipSpeedQuantized() const { return EquipSpeedQuantized; }
 
@@ -148,6 +154,7 @@ private:
 	void UpdateServerSpeedHistory();
 
 	bool bWantsToWalk = false;
+	bool bWantsToUseSpike = false;
 
 	// 이번 이동의 장비 속도 배율(양자화). 255 = 배율 1(칼).
 	uint8 EquipSpeedQuantized = 255;

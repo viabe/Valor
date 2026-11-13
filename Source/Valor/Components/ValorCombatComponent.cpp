@@ -20,6 +20,7 @@
 #include "ValorCharacter.h"
 #include "ValorGameState.h"
 #include "ValorMatchTypes.h"
+#include "World/ValorSpike.h"
 #include "Weapons/ValorMeleeWeapon.h"
 #include "Weapons/ValorWeaponBase.h"
 #include "World/ValorWeaponPickup.h"
@@ -339,7 +340,7 @@ void UValorCombatComponent::TryFireLocalShot()
 
 	// 예약된 다음 발(연사·점사·탭 버퍼)이 사망 뒤에 불려도 쏘지 않는다. 서버도 State.Dead 태그로 따로 거부한다.
 	// 경기 단계가 막으면(경기 종료, 설정에 따라 구매 단계) 쏘지 않는다(서버도 같은 GameState 값으로 거부한다).
-	if (!OwnerCharacter->IsAlive() || !IsFireAllowedByMatch())
+	if (!OwnerCharacter->IsAlive() || !IsFireAllowedByMatch() || AValorSpike::IsCharacterUsingSpike(*OwnerCharacter))
 	{
 		bFireShotBuffered = false;
 		return;
@@ -699,6 +700,13 @@ bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
 	if (!IsFireAllowedByMatch())
 	{
 		RejectShot(TEXT("경기 단계상 사격 불가"), false);
+		return false;
+	}
+
+	// 스파이크를 설치·해체하는 동안에는 총을 쓸 수 없다(손에 스파이크).
+	if (AValorSpike::IsCharacterUsingSpike(*OwnerCharacter))
+	{
+		RejectShot(TEXT("스파이크 사용 중"), false);
 		return false;
 	}
 

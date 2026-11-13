@@ -33,6 +33,8 @@ enum class EValorRoundPhase : uint8
 	BuyPhase,
 	// 교전.
 	Combat,
+	// 스파이크 설치 뒤(폭발까지 45초). 남은 시간은 폭발 시각이다.
+	SpikePlanted,
 	// 라운드 결과가 정해진 뒤 잠시(교전은 계속 가능, 결과는 바뀌지 않음).
 	RoundEnd,
 	// 경기 종료. 잠시 뒤 새 경기를 시작한다.
@@ -83,6 +85,20 @@ namespace ValorMatchRules
 	// 가장 싼 총(CheapestWeaponCost)을 하나 살 수 있을 만큼으로 올린다. 권총이 상점에 들어오면 원래 값(StartingCredits)이다.
 	VALOR_API int32 ComputeEconomyResetCredits(int32 StartingCredits, bool bShopHasSidearms, int32 CheapestWeaponCost);
 
+	// 전멸 판정의 승자. 설치 전: 먼저 전멸한 팀의 상대가 이긴다. 설치 뒤: 수비 전멸이면 공격 승, 공격 전멸은 끝나지 않는다
+	// (수비가 해체해야 이기고, 못 하면 폭발로 공격 승). 끝나지 않으면 None.
+	VALOR_API EValorTeam GetEliminationWinner(bool bAttackersEliminated, bool bDefendersEliminated, bool bSpikePlanted, EValorTeam AttackingTeam);
+
 	// 이 라운드 시작에 경제를 초기화하는가(1라운드, 후반 첫 라운드). 초기화하면 크레딧이 시작값이 되고 들고 있던 장비도 없어진다.
 	VALOR_API bool IsEconomyResetRound(int32 RoundNumber, int32 RoundsPerHalf = 12);
+}
+
+// 스파이크 설치·해체 진행 계산(서버 스파이크와 테스트가 같이 쓴다). 값은 발로란트 기준: 설치 4초, 해체 7초(절반 3.5초 지점 저장).
+namespace ValorSpikeRules
+{
+	// 설치: 누르고 있고 조건이 맞으면 쌓이고, 끊기면 처음부터.
+	VALOR_API float AdvancePlant(float Progress, float DeltaSeconds, bool bPlanting);
+
+	// 해체: 누르고 있으면 쌓이고, 끊기면 저장 지점(절반을 넘겼으면 절반)으로 돌아간다. InOutCheckpoint를 갱신한다.
+	VALOR_API float AdvanceDefuse(float Progress, float& InOutCheckpoint, float DeltaSeconds, bool bDefusing, float DefuseSeconds);
 }

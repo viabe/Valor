@@ -19,6 +19,9 @@
 #include "Weapons/ValorWeaponTypes.h"
 #include "AbilitySystemComponent.h"
 #include "ValorMatchTypes.h"
+#include "EngineUtils.h"
+#include "World/ValorSpike.h"
+#include "World/ValorSpikeSite.h"
 
 namespace
 {
@@ -154,6 +157,7 @@ void AValorHUD::DrawHUD()
 
 	if (UsesRounds())
 	{
+		DrawSpikeStatus(CenterX, CenterY, TextUIScale);
 		DrawMatchStatus(CenterX, TextUIScale);
 		DrawRoundBanner(CenterX, CenterY, TextUIScale);
 		if (!bLocalDead)
@@ -770,7 +774,8 @@ void AValorHUD::DrawMatchStatus(float CenterX, float UIScale)
 	UFont* SmallFont = GEngine->GetSmallFont();
 	const float TimeRemaining = ValorGameState->GetPhaseTimeRemaining();
 	const FString TimeText = TimeRemaining >= 0.0f ? ValorMatchHUD::FormatTime(TimeRemaining) : TEXT("--:--");
-	const bool bTimeLow = ValorGameState->GetRoundPhase() == EValorRoundPhase::Combat && TimeRemaining >= 0.0f && TimeRemaining <= 10.0f;
+	const bool bTimeLow = (ValorGameState->GetRoundPhase() == EValorRoundPhase::SpikePlanted)
+		|| (ValorGameState->GetRoundPhase() == EValorRoundPhase::Combat && TimeRemaining >= 0.0f && TimeRemaining <= 10.0f);
 	const FLinearColor TimeColor = bTimeLow ? ValorMatchHUD::EnemyColor : FLinearColor::White;
 
 	const float RowY = Top + (6.0f * UIScale);
@@ -785,6 +790,12 @@ void AValorHUD::DrawMatchStatus(float CenterX, float UIScale)
 	case EValorRoundPhase::BuyPhase: PhaseText = FString::Printf(TEXT("ROUND %d  |  BUY PHASE (B)"), ValorGameState->GetRoundNumber()); break;
 	case EValorRoundPhase::Combat:
 	case EValorRoundPhase::RoundEnd: PhaseText = FString::Printf(TEXT("ROUND %d"), ValorGameState->GetRoundNumber()); break;
+	case EValorRoundPhase::SpikePlanted:
+	{
+		const AValorSpike* Spike = AValorSpike::FindSpike(GetWorld());
+		PhaseText = FString::Printf(TEXT("ROUND %d  |  SPIKE PLANTED %s"), ValorGameState->GetRoundNumber(), Spike ? *Spike->GetPlantedSiteName().ToString() : TEXT(""));
+		break;
+	}
 	case EValorRoundPhase::MatchEnd: PhaseText = TEXT("MATCH OVER"); break;
 	default: break;
 	}
@@ -1042,5 +1053,113 @@ void AValorHUD::NotifyHitBoxClick(FName BoxName)
 		{
 			ValorController->ServerBuyShield(Index);
 		}
+	}
+}
+
+void AValorHUD::DrawSpikeStatus(float CenterX, float CenterY, float UIScale)
+{
+	const UWorld* World = GetWorld();
+	const AValorGameState* ValorGameState = World ? World->GetGameState<AValorGameState>() : nullptr;
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	const AValorCharacter* Character = PlayerOwner ? Cast<AValorCharacter>(PlayerOwner->GetPawn()) : nullptr;
+	if (!ValorGameState || !GEngine)
+	{
+		return;
+	}
+
+	UFont* MediumFont = GEngine->GetMediumFont();
+	UFont* SmallFont = GEngine->GetSmallFont();
+	const FLinearColor SiteColor(1.0f, 0.8f, 0.2f, 0.9f);
+	const FLinearColor SpikeColor(1.0f, 0.35f, 0.25f, 1.0f);
+	const FVector ViewLocation = PlayerOwner->PlayerCameraManager ? PlayerOwner->PlayerCameraManager->GetCameraLocation() : FVector::ZeroVector;
+
+	// 지점 표시(맵에 모델이 없으니 화면에 글자로 보여 준다): 지점 이름 + 거리(m).
+	for (TActorIterator<AValorSpikeSite> It(World); It; ++It)
+	{
+		const FVector Screen = Project(It->GetActorLocation());
+		if (Screen.Z > 0.0f)
+		{
+			const float Meters = FVector::Dist(ViewLocation, It->GetActorLocation()) / 100.0f;
+			float Y = Screen.Y;
+			Y += DrawShadowedText(It->GetSiteName().ToString(), SiteColor, Screen.X, Y, MediumFont, 1.6f * UIScale, 0.5f);
+			DrawShadowedText(FString::Printf(TEXT("%.0fm"), Meters), SiteColor, Screen.X, Y, SmallFont, UIScale, 0.5f);
+		}
+	}
+
+	const AValorSpike* Spike = AValorSpike::FindSpike(World);
+	if (!Spike)
+	{
+		return;
+	}
+
+	const EValorTeam LocalTeam = ValorPlayerState ? ValorPlayerState->GetTeam() : EValorTeam::None;
+	const bool bLocalAttacker = LocalTeam != EValorTeam::None && LocalTeam == ValorGameState->GetAttackingTeam();
+	const EValorSpikeState SpikeState = Spike->GetState();
+
+	// 스파이크 위치 표시: 설치되면 모두에게, 떨어지면 공격 팀에게.
+	if (SpikeState == EValorSpikeState::Planted || (SpikeState == EValorSpikeState::Dropped && bLocalAttacker))
+	{
+		const FVector Screen = Project(Spike->GetActorLocation() + FVector(0.0f, 0.0f, 40.0f));
+		if (Screen.Z > 0.0f)
+		{
+			DrawShadowedText(SpikeState == EValorSpikeState::Planted ? TEXT("SPIKE") : TEXT("SPIKE (DROPPED)"), SpikeColor, Screen.X, Screen.Y, SmallFont, 1.2f * UIScale, 0.5f);
+		}
+	}
+
+	if (!Character || !Character->IsAlive())
+	{
+		return;
+	}
+
+	// 안내 문구와 진행 막대(화면 아래 가운데).
+	FString Prompt;
+	float Progress = -1.0f;
+	float Checkpoint = -1.0f;
+	FString ProgressLabel;
+	const bool bCanUse = Spike->CanBeUsedBy(*Character);
+	if (Spike->GetCarrier() == Character)
+	{
+		DrawShadowedText(TEXT("SPIKE CARRIER"), SpikeColor, 24.0f * UIScale, Canvas->ClipY - (180.0f * UIScale), MediumFont, UIScale, 0.0f);
+		if (Spike->GetPlantProgress() > 0.0f)
+		{
+			Progress = Spike->GetPlantProgress() / Spike->GetPlantSeconds();
+			ProgressLabel = TEXT("PLANTING");
+		}
+		else
+		{
+			Prompt = bCanUse ? TEXT("HOLD 4 TO PLANT") : TEXT("GO TO A SITE TO PLANT (HOLD 4)");
+		}
+	}
+	else if (SpikeState == EValorSpikeState::Planted && !bLocalAttacker)
+	{
+		if (Spike->GetDefuser() == Character)
+		{
+			Progress = Spike->GetDefuseProgress() / Spike->GetDefuseSeconds();
+			Checkpoint = 0.5f;
+			ProgressLabel = Spike->GetDefuseCheckpoint() > 0.0f ? TEXT("DEFUSING (HALF SAVED)") : TEXT("DEFUSING");
+		}
+		else if (bCanUse)
+		{
+			Prompt = TEXT("HOLD 4 TO DEFUSE");
+		}
+	}
+
+	const float BarWidth = 360.0f * UIScale;
+	const float BarHeight = 10.0f * UIScale;
+	const float BarY = CenterY + (140.0f * UIScale);
+	if (Progress >= 0.0f)
+	{
+		const float BarX = CenterX - (BarWidth * 0.5f);
+		DrawShadowedText(ProgressLabel, FLinearColor::White, CenterX, BarY - (28.0f * UIScale), MediumFont, UIScale, 0.5f);
+		DrawRect2D(FLinearColor::Black, BarX, BarY, BarWidth, BarHeight, 0.6f);
+		DrawRect2D(SiteColor, BarX, BarY, BarWidth * FMath::Clamp(Progress, 0.0f, 1.0f), BarHeight, 0.95f);
+		if (Checkpoint > 0.0f)
+		{
+			DrawRect2D(FLinearColor::White, BarX + (BarWidth * Checkpoint) - UIScale, BarY - (3.0f * UIScale), 2.0f * UIScale, BarHeight + (6.0f * UIScale), 0.9f);
+		}
+	}
+	else if (!Prompt.IsEmpty())
+	{
+		DrawShadowedText(Prompt, FLinearColor(1.0f, 1.0f, 1.0f, 0.9f), CenterX, BarY - (28.0f * UIScale), MediumFont, UIScale, 0.5f);
 	}
 }

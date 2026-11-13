@@ -81,4 +81,34 @@ bool FValorMatchTeamsAndSpawnsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FValorSpikeRulesTest, "Valor.Match.Rules.Spike", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FValorSpikeRulesTest::RunTest(const FString& Parameters)
+{
+	// 전멸 판정(공격 = TeamA).
+	TestEqual(TEXT("설치 전 공격 전멸 → 수비 승"), ValorMatchRules::GetEliminationWinner(true, false, false, EValorTeam::TeamA), EValorTeam::TeamB);
+	TestEqual(TEXT("설치 전 수비 전멸 → 공격 승"), ValorMatchRules::GetEliminationWinner(false, true, false, EValorTeam::TeamA), EValorTeam::TeamA);
+	TestEqual(TEXT("설치 뒤 공격 전멸 → 계속(해체해야 함)"), ValorMatchRules::GetEliminationWinner(true, false, true, EValorTeam::TeamA), EValorTeam::None);
+	TestEqual(TEXT("설치 뒤 수비 전멸 → 공격 승"), ValorMatchRules::GetEliminationWinner(false, true, true, EValorTeam::TeamA), EValorTeam::TeamA);
+	TestEqual(TEXT("아무도 전멸 안 함"), ValorMatchRules::GetEliminationWinner(false, false, false, EValorTeam::TeamB), EValorTeam::None);
+
+	// 설치: 누르는 동안 쌓이고 끊기면 0.
+	TestEqual(TEXT("설치 진행"), ValorSpikeRules::AdvancePlant(1.0f, 0.5f, true), 1.5f);
+	TestEqual(TEXT("설치 끊김"), ValorSpikeRules::AdvancePlant(3.9f, 0.1f, false), 0.0f);
+
+	// 해체(7초): 절반(3.5초)을 넘기면 저장되고, 끊기면 저장 지점으로 돌아간다.
+	float Checkpoint = 0.0f;
+	float Progress = ValorSpikeRules::AdvanceDefuse(0.0f, Checkpoint, 3.0f, true, 7.0f);
+	TestEqual(TEXT("해체 3초"), Progress, 3.0f);
+	TestEqual(TEXT("절반 전에는 저장 없음"), Checkpoint, 0.0f);
+	Progress = ValorSpikeRules::AdvanceDefuse(Progress, Checkpoint, 0.1f, false, 7.0f);
+	TestEqual(TEXT("절반 전에 끊기면 0"), Progress, 0.0f);
+	Progress = ValorSpikeRules::AdvanceDefuse(0.0f, Checkpoint, 4.0f, true, 7.0f);
+	TestEqual(TEXT("절반 넘김 → 저장 3.5"), Checkpoint, 3.5f);
+	Progress = ValorSpikeRules::AdvanceDefuse(Progress, Checkpoint, 0.1f, false, 7.0f);
+	TestEqual(TEXT("끊기면 3.5부터"), Progress, 3.5f);
+	Progress = ValorSpikeRules::AdvanceDefuse(Progress, Checkpoint, 3.5f, true, 7.0f);
+	TestEqual(TEXT("이어서 7초 완료"), Progress, 7.0f);
+	return true;
+}
+
 #endif

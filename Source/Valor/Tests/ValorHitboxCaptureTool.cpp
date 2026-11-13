@@ -27,7 +27,7 @@
 // 정면·측면·앉기 자세와 머리 확대 화면을 찍고, 수평 탄을 위에서 아래로 쏴 높이별 부위(H 머리, B 몸, L 다리, - 빗나감)를 로그로 남긴다.
 // 저장 위치: Saved/HitboxCapture/*.png. 로그는 HITBOX로 시작한다.
 // 실행(에디터를 닫을 필요 없음):
-//   UnrealEditor.exe Valor.uproject /Game/Maps/ThridPersonExampleMap -game -windowed -ResX=1280 -ResY=720
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=DM" -game -windowed -ResX=1280 -ResY=720
 //     -ExecCmds="Automation RunTests Valor.Tools.HitboxCapture; Quit"
 // =====================================================================================================
 

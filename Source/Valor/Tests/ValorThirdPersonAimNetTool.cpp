@@ -24,7 +24,7 @@
 // 각 프로세스는 "상대 총"을 잰다: 총구와 내 카메라 사이 각도, 총구 선이 내 카메라를 비켜 가는 거리(위/오른쪽), 총의 기울기(cant).
 // 저장 위치: Saved/ThirdPersonAimNet/Host.png, Client.png. 수치는 각 프로세스 로그의 "TPNET" 줄.
 // 실행(Git Bash는 MSYS_NO_PATHCONV=1, 호스트를 먼저 띄운다):
-//   UnrealEditor.exe Valor.uproject /Game/Maps/ThridPersonExampleMap?listen -game -windowed -ResX=960 -ResY=540
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?listen?game=DM" -game -windowed -ResX=960 -ResY=540
 //     -ExecCmds="Automation RunTests Valor.Tools.ThirdPersonAimNet.Host; Quit"
 //   UnrealEditor.exe Valor.uproject 127.0.0.1 -game -windowed -ResX=960 -ResY=540
 //     -ExecCmds="Automation RunTests Valor.Tools.ThirdPersonAimNet.Client; Quit"

@@ -18,6 +18,7 @@
 #include "UnrealClient.h"
 #include "ValorCharacter.h"
 #include "ValorGameState.h"
+#include "World/ValorSpawnBarrier.h"
 #include "Weapons/ValorWeaponBase.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -146,12 +147,38 @@ namespace ValorMatchFlowTool
 				Expect(!GameState->IsMovementLocked() && Character->GetCharacterMovement()->GetMaxSpeed() > 0.0f, TEXT("구매 단계에도 이동 가능(발로란트)"));
 				Expect(GameState->IsWeaponFireAllowed(), TEXT("구매 단계에도 사격 가능(발로란트)"));
 
+				// 스폰 장벽: 내 앞 150cm에 얇은 장벽(20cm x 400cm x 300cm)을 세우고 1.5초 동안 앞으로 걸어 막히는지 본다.
+				const FVector Forward = FRotator(0.0f, Controller->GetControlRotation().Yaw, 0.0f).Vector();
+				BarrierStart = Character->GetActorLocation();
+				BarrierForward = Forward;
+				FActorSpawnParameters BarrierSpawn;
+				BarrierSpawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+				Barrier = World->SpawnActor<AValorSpawnBarrier>(AValorSpawnBarrier::StaticClass(),
+					FTransform(Forward.Rotation(), BarrierStart + (Forward * 150.0f), FVector(0.2f, 4.0f, 3.0f)), BarrierSpawn);
+				Step = EStep::PushIntoBarrier;
+				PushUntil = FPlatformTime::Seconds() + 1.7;
+				return false;
+			}
+
+			case EStep::PushIntoBarrier:
+				if (FPlatformTime::Seconds() < PushUntil)
+				{
+					Character->AddMovementInput(BarrierForward, 1.0f);
+					return false;
+				}
+				else
+				{
+					const float Moved = static_cast<float>((Character->GetActorLocation() - BarrierStart) | BarrierForward);
+					Test->AddInfo(FString::Printf(TEXT("MATCH barrier: active=%d moved=%.0fcm (wall at 140cm)"), Barrier.IsValid() && Barrier->IsBarrierActive() ? 1 : 0, Moved));
+					Expect(Barrier.IsValid() && Barrier->IsBarrierActive(), TEXT("구매 단계에 스폰 장벽이 켜짐"));
+					Expect(Moved > 40.0f && Moved < 140.0f, TEXT("구매 단계에 장벽을 넘어가지 못함"));
+				}
+
 				// 실제 키 입력 경로: B(라운드 시작에 캐릭터가 새로 스폰된 뒤라 예전 입력 컨텍스트가 남아 있으면 여기서 막힌다).
 				Controller->InputKey(FInputKeyParams(EKeys::B, IE_Pressed, 1.0, false));
 				Step = EStep::ReleaseBOpen;
 				Wait(0.1);
 				return false;
-			}
 
 			case EStep::ReleaseBOpen:
 				Controller->InputKey(FInputKeyParams(EKeys::B, IE_Released, 0.0, false));
@@ -291,6 +318,8 @@ namespace ValorMatchFlowTool
 					static_cast<int32>(GameState->GetLastRoundWinner()), static_cast<int32>(GameState->GetLastRoundEndReason()),
 					GameState->GetTeamScore(EValorTeam::TeamA), GameState->GetTeamScore(EValorTeam::TeamB), PlayerState->GetCredits()));
 				Expect(GameState->GetLastRoundWinner() == EValorTeam::TeamB && GameState->GetLastRoundEndReason() == EValorRoundEndReason::TimeExpired, TEXT("시간 종료 → 수비(TeamB) 승"));
+				// 장벽은 단계가 바뀐 다음 틱에 꺼지므로 교전 시작 순간이 아니라 여기서 본다.
+				Expect(Barrier.IsValid() && !Barrier->IsBarrierActive() && !Barrier->GetActorEnableCollision(), TEXT("구매 단계가 끝나면 스폰 장벽이 사라짐"));
 				Expect(GameState->GetTeamScore(EValorTeam::TeamB) == 1 && GameState->GetTeamScore(EValorTeam::TeamA) == 0, TEXT("점수 0:1"));
 				Expect(PlayerState->GetCredits() == 3000, TEXT("패배 보상 1900: 1100 → 3000"));
 				Step = EStep::RoundEndShot;
@@ -334,6 +363,7 @@ namespace ValorMatchFlowTool
 		{
 			WaitRound1Buy,
 			Round1Checks,
+			PushIntoBarrier,
 			ReleaseBOpen,
 			AimAtShieldCard,
 			ClickShield,
@@ -372,6 +402,10 @@ namespace ValorMatchFlowTool
 		FString OutputDirectory;
 		EStep Step = EStep::WaitRound1Buy;
 		int32 AmmoBeforeClick = -1;
+		TWeakObjectPtr<AValorSpawnBarrier> Barrier;
+		FVector BarrierStart = FVector::ZeroVector;
+		FVector BarrierForward = FVector::ForwardVector;
+		double PushUntil = 0.0;
 		double StartTime = -1.0;
 		double WaitUntil = 0.0;
 	};

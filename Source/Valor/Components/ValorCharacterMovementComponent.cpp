@@ -1,5 +1,7 @@
 #include "Components/ValorCharacterMovementComponent.h"
 #include "ValorGameState.h"
+#include "ValorCharacter.h"
+#include "World/ValorSpike.h"
 
 #include "Components/ValorCombatComponent.h"
 #include "Engine/World.h"
@@ -50,6 +52,7 @@ void FValorSavedMove::Clear()
 	Super::Clear();
 
 	bSavedWantsToWalk = false;
+	bSavedWantsToUseSpike = false;
 	SavedEquipSpeedQuantized = 255;
 }
 
@@ -60,6 +63,10 @@ uint8 FValorSavedMove::GetCompressedFlags() const
 	{
 		Flags |= FLAG_Custom_0;
 	}
+	if (bSavedWantsToUseSpike)
+	{
+		Flags |= FLAG_Custom_1;
+	}
 
 	return Flags;
 }
@@ -68,7 +75,7 @@ bool FValorSavedMove::CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* I
 {
 	// 속도가 다른 두 이동을 하나로 합치면 서버가 한 속도로 계산해 클라 결과와 달라진다.
 	const FValorSavedMove* NewValorMove = static_cast<const FValorSavedMove*>(NewMove.Get());
-	if (bSavedWantsToWalk != NewValorMove->bSavedWantsToWalk || SavedEquipSpeedQuantized != NewValorMove->SavedEquipSpeedQuantized)
+	if (bSavedWantsToWalk != NewValorMove->bSavedWantsToWalk || bSavedWantsToUseSpike != NewValorMove->bSavedWantsToUseSpike || SavedEquipSpeedQuantized != NewValorMove->SavedEquipSpeedQuantized)
 	{
 		return false;
 	}
@@ -81,7 +88,7 @@ bool FValorSavedMove::IsImportantMove(const FSavedMovePtr& LastAckedMove) const
 	// 속도 상태가 바뀐 이동은 유실되면 서버가 다른 속도로 계산하므로, 확인될 때까지 다음 패킷에 다시 실어 보낸다(엔진의 "중요한 이동").
 	if (const FValorSavedMove* AckedValorMove = static_cast<const FValorSavedMove*>(LastAckedMove.Get()))
 	{
-		if (bSavedWantsToWalk != AckedValorMove->bSavedWantsToWalk || SavedEquipSpeedQuantized != AckedValorMove->SavedEquipSpeedQuantized)
+		if (bSavedWantsToWalk != AckedValorMove->bSavedWantsToWalk || bSavedWantsToUseSpike != AckedValorMove->bSavedWantsToUseSpike || SavedEquipSpeedQuantized != AckedValorMove->SavedEquipSpeedQuantized)
 		{
 			return true;
 		}
@@ -97,6 +104,7 @@ void FValorSavedMove::SetMoveFor(ACharacter* C, float InDeltaTime, FVector const
 	if (const UValorCharacterMovementComponent* MovementComponent = C ? Cast<UValorCharacterMovementComponent>(C->GetCharacterMovement()) : nullptr)
 	{
 		bSavedWantsToWalk = MovementComponent->bWantsToWalk;
+		bSavedWantsToUseSpike = MovementComponent->bWantsToUseSpike;
 		SavedEquipSpeedQuantized = MovementComponent->EquipSpeedQuantized;
 	}
 }
@@ -185,6 +193,13 @@ float UValorCharacterMovementComponent::GetMaxSpeed() const
 		return 0.0f;
 	}
 
+	// 스파이크 설치·해체 중에는 제자리에 묶인다(발로란트). 4 키 플래그 + 복제된 스파이크 상태로 서버와 소유 클라가 같이 판단한다.
+	const AValorCharacter* ValorOwner = Cast<AValorCharacter>(CharacterOwner);
+	if (bWantsToUseSpike && ValorOwner && AValorSpike::IsCharacterUsingSpike(*ValorOwner))
+	{
+		return 0.0f;
+	}
+
 	const float EquipMultiplier = ValorMovement::DequantizeSpeedMultiplier(EquipSpeedQuantized);
 
 	switch (MovementMode)
@@ -207,6 +222,7 @@ void UValorCharacterMovementComponent::UpdateFromCompressedFlags(uint8 Flags)
 	Super::UpdateFromCompressedFlags(Flags);
 
 	bWantsToWalk = (Flags & FSavedMove_Character::FLAG_Custom_0) != 0;
+	bWantsToUseSpike = (Flags & FSavedMove_Character::FLAG_Custom_1) != 0;
 }
 
 FNetworkPredictionData_Client* UValorCharacterMovementComponent::GetPredictionData_Client() const

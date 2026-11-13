@@ -15,6 +15,8 @@
 #include "ValorCharacter.h"
 #include "ValorGameState.h"
 #include "Weapons/ValorWeaponBase.h"
+#include "World/ValorSpike.h"
+#include "World/ValorSpikeSite.h"
 #include "World/ValorWeaponPickup.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogValorMatch, Log, All);
@@ -72,6 +74,7 @@ void AValorMatchGameMode::InitGame(const FString& MapName, const FString& Option
 	ReadSeconds(TEXT("RoundTime"), RoundSeconds);
 	ReadSeconds(TEXT("RoundEndTime"), RoundEndSeconds);
 	ReadSeconds(TEXT("MatchEndTime"), MatchEndSeconds);
+	ReadSeconds(TEXT("SpikeTime"), SpikeDetonationSeconds);
 }
 
 void AValorMatchGameMode::InitGameState()
@@ -185,7 +188,8 @@ void AValorMatchGameMode::Logout(AController* Exiting)
 		PlayerState->SetTeam(EValorTeam::None);
 	}
 
-	if (CurrentPhase == EValorRoundPhase::Combat)
+	// 나간 사람이 스파이크를 들고 있었으면 그 자리에 떨어진다(스파이크 틱이 소지자 없음을 보고 처리한다).
+	if (IsRoundLive())
 	{
 		CheckElimination();
 	}
@@ -229,6 +233,18 @@ void AValorMatchGameMode::HandlePhaseTimerExpired()
 	case EValorRoundPhase::BuyPhase:
 		StartCombatPhase();
 		break;
+
+	case EValorRoundPhase::SpikePlanted:
+	{
+		// 폭발: 공격 승. 결과를 먼저 정하고 터뜨린다(폭발로 죽은 사람 때문에 전멸 판정이 먼저 끼어들지 않게).
+		const AValorGameState* PlantedGameState = GetValorGameState();
+		EndRound(PlantedGameState ? PlantedGameState->GetAttackingTeam() : EValorTeam::TeamA, EValorRoundEndReason::SpikeDetonated);
+		if (AValorSpike* Spike = AValorSpike::FindSpike(GetWorld()))
+		{
+			Spike->Detonate(DetonationRadiusCm);
+		}
+		break;
+	}
 
 	case EValorRoundPhase::Combat:
 	{
@@ -315,6 +331,8 @@ void AValorMatchGameMode::BeginRound()
 
 	UE_LOG(LogValorMatch, Log, TEXT("라운드 %d 시작: 공격 %s, 점수 %d:%d%s%s"), RoundNumber, AttackingTeam == EValorTeam::TeamA ? TEXT("TeamA") : TEXT("TeamB"),
 		ScoreA, ScoreB, bEconomyReset ? TEXT(", 경제 초기화") : TEXT(""), bOvertime ? TEXT(", 연장전") : TEXT(""));
+	EnsureSpikeSites();
+	SetupSpikeForRound();
 	SetPhase(EValorRoundPhase::BuyPhase, BuyPhaseSeconds);
 }
 
@@ -327,28 +345,29 @@ void AValorMatchGameMode::StartCombatPhase()
 
 void AValorMatchGameMode::CheckElimination()
 {
-	if (CurrentPhase != EValorRoundPhase::Combat)
+	const AValorGameState* ValorGameState = GetValorGameState();
+	if (!IsRoundLive() || !ValorGameState)
 	{
 		return;
 	}
 
 	// 라운드 시작에 사람이 있던 팀만 전멸로 본다(혼자 연습하면 시간 종료로 끝난다).
+	const EValorTeam AttackingTeam = ValorGameState->GetAttackingTeam();
 	const bool bAEliminated = bTeamAHadPlayers && CountAlivePlayers(EValorTeam::TeamA) == 0;
 	const bool bBEliminated = bTeamBHadPlayers && CountAlivePlayers(EValorTeam::TeamB) == 0;
-	if (bAEliminated)
+	const bool bAttackersEliminated = AttackingTeam == EValorTeam::TeamA ? bAEliminated : bBEliminated;
+	const bool bDefendersEliminated = AttackingTeam == EValorTeam::TeamA ? bBEliminated : bAEliminated;
+	const EValorTeam Winner = ValorMatchRules::GetEliminationWinner(bAttackersEliminated, bDefendersEliminated, CurrentPhase == EValorRoundPhase::SpikePlanted, AttackingTeam);
+	if (Winner != EValorTeam::None)
 	{
-		EndRound(EValorTeam::TeamB, EValorRoundEndReason::Elimination);
-	}
-	else if (bBEliminated)
-	{
-		EndRound(EValorTeam::TeamA, EValorRoundEndReason::Elimination);
+		EndRound(Winner, EValorRoundEndReason::Elimination);
 	}
 }
 
 void AValorMatchGameMode::EndRound(EValorTeam Winner, EValorRoundEndReason Reason)
 {
 	AValorGameState* ValorGameState = GetValorGameState();
-	if (!ValorGameState || CurrentPhase != EValorRoundPhase::Combat || Winner == EValorTeam::None)
+	if (!ValorGameState || !IsRoundLive() || Winner == EValorTeam::None)
 	{
 		return;
 	}
@@ -373,7 +392,7 @@ void AValorMatchGameMode::EndRound(EValorTeam Winner, EValorRoundEndReason Reaso
 	ValorGameState->SetTeamScores(ScoreA, ScoreB);
 	ValorGameState->SetRoundResult(Winner, Reason);
 	UE_LOG(LogValorMatch, Log, TEXT("라운드 %d 종료: %s 승리(%s), 점수 %d:%d"), RoundNumber, Winner == EValorTeam::TeamA ? TEXT("TeamA") : TEXT("TeamB"),
-		Reason == EValorRoundEndReason::Elimination ? TEXT("전멸") : TEXT("시간 종료"), ScoreA, ScoreB);
+		*UEnum::GetValueAsString(Reason), ScoreA, ScoreB);
 
 	const EValorTeam MatchWinner = ValorMatchRules::GetMatchWinner(ScoreA, ScoreB, RoundsToWin);
 	if (MatchWinner != EValorTeam::None)
@@ -831,4 +850,127 @@ bool AValorMatchGameMode::TrySellShield(AController* Buyer, int32 ShieldIndex)
 	SetShield(*Character, Purchase.PreviousShield, Purchase.PreviousMaxShield);
 	PlayerState->AddCredits(Purchase.Cost);
 	return true;
+}
+
+// ======================================================================================
+// 스파이크
+// ======================================================================================
+
+void AValorMatchGameMode::EnsureSpikeSites()
+{
+	UWorld* World = GetWorld();
+	if (!bCreateFallbackSpikeSites || TActorIterator<AValorSpikeSite>(World) || DefenseSpawnBases.Num() == 0)
+	{
+		return;
+	}
+
+	// 맵에 지점이 없다: 수비 스폰 양옆 바닥에 임시 지점 A(오른쪽)·B(왼쪽)를 만든다. 한 번 만들면 경기 내내 그대로 둔다.
+	const FTransform& DefenseBase = DefenseSpawnBases[0];
+	const FVector Right = DefenseBase.GetRotation().GetRightVector().GetSafeNormal2D();
+	const TPair<FName, float> Sites[] = {{TEXT("A"), 1.0f}, {TEXT("B"), -1.0f}};
+	for (const TPair<FName, float>& SiteInfo : Sites)
+	{
+		FVector Location = DefenseBase.GetLocation() + (Right * FallbackSiteOffsetCm * SiteInfo.Value);
+		FHitResult FloorHit;
+		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ValorFallbackSite), false);
+		for (TActorIterator<AValorCharacter> It(World); It; ++It)
+		{
+			QueryParams.AddIgnoredActor(*It);
+		}
+		if (World->LineTraceSingleByChannel(FloorHit, Location + FVector(0.0f, 0.0f, 300.0f), Location - FVector(0.0f, 0.0f, 2000.0f), ECC_WorldStatic, QueryParams))
+		{
+			Location = FloorHit.ImpactPoint + FVector(0.0f, 0.0f, 100.0f);
+		}
+
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		if (AValorSpikeSite* Site = World->SpawnActor<AValorSpikeSite>(AValorSpikeSite::StaticClass(), FTransform(DefenseBase.GetRotation(), Location), SpawnParameters))
+		{
+			Site->SetSiteName(SiteInfo.Key);
+			UE_LOG(LogValorMatch, Log, TEXT("맵에 스파이크 지점이 없어 임시 지점 %s를 만듦: %s"), *SiteInfo.Key.ToString(), *Location.ToCompactString());
+		}
+	}
+}
+
+void AValorMatchGameMode::SetupSpikeForRound()
+{
+	UWorld* World = GetWorld();
+	for (TActorIterator<AValorSpike> It(World); It; ++It)
+	{
+		It->Destroy();
+	}
+
+	const AValorGameState* ValorGameState = GetValorGameState();
+	if (!ValorGameState)
+	{
+		return;
+	}
+
+	// 공격 팀 중 무작위 한 명이 들고 시작한다.
+	TArray<AValorCharacter*> Attackers;
+	TArray<AController*> Controllers;
+	GetMatchPlayers(Controllers);
+	for (AController* Controller : Controllers)
+	{
+		AValorCharacter* Character = Cast<AValorCharacter>(Controller->GetPawn());
+		if (Character && Character->IsAlive() && ValorTeams::GetTeamOf(Controller) == ValorGameState->GetAttackingTeam())
+		{
+			Attackers.Add(Character);
+		}
+	}
+	if (Attackers.Num() == 0)
+	{
+		return;
+	}
+
+	AValorCharacter* Carrier = Attackers[FMath::RandRange(0, Attackers.Num() - 1)];
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	UClass* ClassToSpawn = SpikeClass ? SpikeClass.Get() : AValorSpike::StaticClass();
+	if (AValorSpike* Spike = World->SpawnActor<AValorSpike>(ClassToSpawn, Carrier->GetActorTransform(), SpawnParameters))
+	{
+		Spike->GiveTo(Carrier);
+		UE_LOG(LogValorMatch, Log, TEXT("스파이크 소지: %s"), *GetNameSafe(Carrier->GetPlayerState()));
+	}
+}
+
+void AValorMatchGameMode::HandleSpikePlanted(AValorCharacter* Planter)
+{
+	AValorGameState* ValorGameState = GetValorGameState();
+	if (CurrentPhase != EValorRoundPhase::Combat || !ValorGameState)
+	{
+		return;
+	}
+
+	SetPhase(EValorRoundPhase::SpikePlanted, SpikeDetonationSeconds);
+
+	// 설치 보너스: 공격 팀 전원(죽은 사람 포함).
+	TArray<AController*> Controllers;
+	GetMatchPlayers(Controllers);
+	for (AController* Controller : Controllers)
+	{
+		if (ValorTeams::GetTeamOf(Controller) == ValorGameState->GetAttackingTeam())
+		{
+			Controller->GetPlayerState<AValorPlayerState>()->AddCredits(PlantBonus);
+		}
+	}
+
+	const AValorSpike* Spike = AValorSpike::FindSpike(GetWorld());
+	UE_LOG(LogValorMatch, Log, TEXT("스파이크 설치: %s, 지점 %s, 폭발까지 %.0f초"), *GetNameSafe(Planter ? Planter->GetPlayerState() : nullptr),
+		Spike ? *Spike->GetPlantedSiteName().ToString() : TEXT("?"), SpikeDetonationSeconds);
+
+	// 수비가 이미 전멸했으면 바로 끝난다.
+	CheckElimination();
+}
+
+void AValorMatchGameMode::HandleSpikeDefused(AValorCharacter* Defuser)
+{
+	const AValorGameState* ValorGameState = GetValorGameState();
+	if (CurrentPhase != EValorRoundPhase::SpikePlanted || !ValorGameState)
+	{
+		return;
+	}
+
+	UE_LOG(LogValorMatch, Log, TEXT("스파이크 해체: %s"), *GetNameSafe(Defuser ? Defuser->GetPlayerState() : nullptr));
+	EndRound(ValorTeams::GetOpposingTeam(ValorGameState->GetAttackingTeam()), EValorRoundEndReason::SpikeDefused);
 }

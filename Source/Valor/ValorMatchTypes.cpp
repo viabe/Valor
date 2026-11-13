@@ -99,8 +99,47 @@ namespace ValorMatchRules
 		return FMath::Max(StartingCredits, CheapestWeaponCost);
 	}
 
+	EValorTeam GetEliminationWinner(bool bAttackersEliminated, bool bDefendersEliminated, bool bSpikePlanted, EValorTeam AttackingTeam)
+	{
+		const EValorTeam DefendingTeam = ValorTeams::GetOpposingTeam(AttackingTeam);
+		if (bDefendersEliminated)
+		{
+			return AttackingTeam;
+		}
+
+		if (bAttackersEliminated && !bSpikePlanted)
+		{
+			return DefendingTeam;
+		}
+
+		return EValorTeam::None;
+	}
+
 	bool IsEconomyResetRound(int32 RoundNumber, int32 RoundsPerHalf)
 	{
 		return RoundNumber == 1 || RoundNumber == RoundsPerHalf + 1;
+	}
+}
+
+namespace ValorSpikeRules
+{
+	float AdvancePlant(float Progress, float DeltaSeconds, bool bPlanting)
+	{
+		return bPlanting ? Progress + DeltaSeconds : 0.0f;
+	}
+
+	float AdvanceDefuse(float Progress, float& InOutCheckpoint, float DeltaSeconds, bool bDefusing, float DefuseSeconds)
+	{
+		if (!bDefusing)
+		{
+			return InOutCheckpoint;
+		}
+
+		const float NewProgress = Progress + DeltaSeconds;
+		if (NewProgress >= DefuseSeconds * 0.5f)
+		{
+			InOutCheckpoint = FMath::Max(InOutCheckpoint, DefuseSeconds * 0.5f);
+		}
+		return NewProgress;
 	}
 }

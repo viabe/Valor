@@ -9,11 +9,11 @@ class AValorGameState;
 class AValorPlayerState;
 
 /**
- * 경쟁전 규칙(서버 전용): 두 팀, 라운드 상태 머신, 경제(크레딧·상점). 스파이크는 다음 단계에서 붙인다.
+ * 경쟁전 규칙(서버 전용): 두 팀, 라운드 상태 머신, 경제(크레딧·상점), 스파이크(설치·해체·폭발).
  *
  * 라운드 흐름: 접속 대기(PreMatchDelay) → [구매 30초 → 교전 100초 → 라운드 종료 7초] 반복 → 경기 종료 15초 → 새 경기.
  *   - 라운드 시작: 모든 플레이어를 팀 스폰에 새로 스폰한다. 살아남은 사람은 총·실드를 그대로 가져가고, 죽은 사람은 기본 무장(칼, 권총 BP가 생기면 클래식)이다.
- *   - 승리 조건: 상대 팀 전멸, 또는 시간 종료(수비 승). 스파이크 설치·해체·폭발은 다음 단계.
+ *   - 승리 조건: 상대 팀 전멸(설치 뒤 공격 전멸은 제외), 시간 종료(설치 전, 수비 승), 해체(수비 승), 폭발(공격 승).
  *   - 13승 선승, 12라운드 뒤 공수 교대(경제 초기화), 12:12면 연장전(2점 차, 매 라운드 공수 교대, 크레딧 5000).
  * 경제: 시작 800, 승리 3000, 패배 1900/2400/2900(연패), 적 처치 200, 상한 9000. 구매 단계에서만 사고, 이번 라운드에 산 것은 되팔 수 있다.
  * 왜 GameMode인가: 규칙은 서버만 알고 바꾼다. 결과(단계·점수·크레딧·팀)만 GameState/PlayerState로 복제하고,
@@ -48,6 +48,12 @@ public:
 	// 개발용: 지금 단계를 바로 끝낸다(단계 타이머가 끝난 것과 같다).
 	void DebugSkipPhase();
 
+	// === 스파이크(서버, AValorSpike가 부른다) ===
+	// 설치: 교전 → 설치 단계(폭발까지 SpikeDetonationSeconds), 공격 팀 전원 +PlantBonus.
+	void HandleSpikePlanted(class AValorCharacter* Planter);
+	// 해체: 수비 승.
+	void HandleSpikeDefused(class AValorCharacter* Defuser);
+
 	// 팀 배정(테스트용 공개): 인원이 적은 팀, 같으면 TeamA.
 	static EValorTeam PickTeamForNewPlayer(int32 CountA, int32 CountB);
 
@@ -73,6 +79,10 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Timing", meta=(ClampMin="1.0"))
 	float MatchEndSeconds = 15.0f;
 
+	// 설치 뒤 폭발까지(초). URL ?SpikeTime=로 바꿀 수 있다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Timing", meta=(ClampMin="1.0"))
+	float SpikeDetonationSeconds = 45.0f;
+
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Rounds", meta=(ClampMin="1"))
 	int32 RoundsPerHalf = 12;
 
@@ -89,6 +99,25 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Economy", meta=(ClampMin="0"))
 	int32 KillReward = 200;
+
+	// 스파이크를 설치하면 공격 팀 전원이 받는다(라운드를 져도 받는다).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Economy", meta=(ClampMin="0"))
+	int32 PlantBonus = 300;
+
+	// === 스파이크 ===
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Spike")
+	TSubclassOf<class AValorSpike> SpikeClass;
+
+	// 폭발 반경(cm). 안에 있는 캐릭터는 팀과 관계없이 죽는다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Spike", meta=(ClampMin="0.0"))
+	float DetonationRadiusCm = 2500.0f;
+
+	// 맵에 스파이크 지점(AValorSpikeSite)이 없으면 수비 스폰 양옆에 임시 지점 A·B를 만든다(시스템 확인용).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Spike")
+	bool bCreateFallbackSpikeSites = true;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Spike", meta=(ClampMin="100.0"))
+	float FallbackSiteOffsetCm = 700.0f;
 
 	// 구매 단계에 이동을 묶는다(기본 끔: 발로란트처럼 구매 단계에도 움직인다. 스폰 장벽이 없는 맵에서 돌진을 막고 싶을 때 켠다).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match")
@@ -130,6 +159,11 @@ private:
 	void EndRound(EValorTeam Winner, EValorRoundEndReason Reason);
 	void ResetMatch();
 	void CheckElimination();
+	bool IsRoundLive() const { return CurrentPhase == EValorRoundPhase::Combat || CurrentPhase == EValorRoundPhase::SpikePlanted; }
+
+	// 스파이크: 지점 확인(없으면 임시 지점), 이전 스파이크 정리, 공격 팀 한 명에게 지급.
+	void EnsureSpikeSites();
+	void SetupSpikeForRound();
 
 	// 스폰
 	void RebuildSpawnBases();

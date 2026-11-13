@@ -128,6 +128,7 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 	PreviousWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_PreviousWeapon"));
 	DropWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_DropWeapon"));
 	BuyMenuAction = FindOrCreateBooleanAction(Outer, TEXT("IA_BuyMenu"));
+	UseSpikeAction = FindOrCreateBooleanAction(Outer, TEXT("IA_UseSpike"));
 
 	if (!WeaponSlotMappingContext)
 	{
@@ -141,6 +142,7 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 		WeaponSlotMappingContext->MapKey(PreviousWeaponAction, EKeys::MouseScrollUp);
 		WeaponSlotMappingContext->MapKey(DropWeaponAction, EKeys::G);
 		WeaponSlotMappingContext->MapKey(BuyMenuAction, EKeys::B);
+		WeaponSlotMappingContext->MapKey(UseSpikeAction, EKeys::Four);
 	}
 
 	if (Subsystem)
@@ -156,6 +158,9 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 	EnhancedInputComponent->BindAction(PreviousWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandlePreviousWeaponStarted);
 	EnhancedInputComponent->BindAction(DropWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleDropWeaponStarted);
 	EnhancedInputComponent->BindAction(BuyMenuAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleBuyMenuStarted);
+	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleUseSpikeStarted);
+	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleUseSpikeCompleted);
+	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Canceled, this, &UValorInputRouterComponent::HandleUseSpikeCompleted);
 }
 
 void UValorInputRouterComponent::HandleMove(const FInputActionValue& Value)
@@ -324,5 +329,21 @@ void UValorInputRouterComponent::HandleBuyMenuStarted(const FInputActionValue& V
 	if (AValorPlayerController* PlayerController = OwnerPawn ? Cast<AValorPlayerController>(OwnerPawn->GetController()) : nullptr)
 	{
 		PlayerController->ToggleBuyMenu();
+	}
+}
+
+void UValorInputRouterComponent::HandleUseSpikeStarted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleSpikeInputPressed();
+	}
+}
+
+void UValorInputRouterComponent::HandleUseSpikeCompleted(const FInputActionValue& Value)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleSpikeInputReleased();
 	}
 }
