@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "ValorGameMode.h"
+#include "AbilitySystem/ValorAgentTypes.h"
 #include "ValorMatchTypes.h"
 #include "ValorMatchGameMode.generated.h"
 
@@ -44,6 +45,11 @@ public:
 	bool TryBuyShield(AController* Buyer, int32 ShieldIndex);
 	bool TrySellWeapon(AController* Buyer, TSubclassOf<class AValorWeaponBase> WeaponClass);
 	bool TrySellShield(AController* Buyer, int32 ShieldIndex);
+	bool TryBuyAbility(AController* Buyer, EValorAbilitySlot Slot);
+	bool TrySellAbility(AController* Buyer, EValorAbilitySlot Slot);
+
+	// 개발용: 궁극기 포인트를 정한다.
+	void DebugSetUltimatePoints(AController* Target, int32 Points);
 
 	// 개발용: 지금 단계를 바로 끝낸다(단계 타이머가 끝난 것과 같다).
 	void DebugSkipPhase();
@@ -102,6 +108,15 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Economy", meta=(ClampMin="0"))
 	int32 KillReward = 200;
+
+	// === 요원·스킬 ===
+	// 접속하면 받는 요원(요원 선택 화면은 이후). 지금은 샘플 요원 Drift.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent")
+	TSubclassOf<class UValorAgentDefinition> DefaultAgentClass;
+
+	// 궁극기 포인트: 처치·사망·설치·해체 각 1점.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent", meta=(ClampMin="0"))
+	int32 UltimatePointsPerEvent = 1;
 
 	// 스파이크를 설치하면 공격 팀 전원이 받는다(라운드를 져도 받는다).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Economy", meta=(ClampMin="0"))
@@ -163,6 +178,12 @@ private:
 	void ResetMatch();
 	void CheckElimination();
 	bool IsRoundLive() const { return CurrentPhase == EValorRoundPhase::Combat || CurrentPhase == EValorRoundPhase::SpikePlanted; }
+
+	// 스킬: 요원 지정(없으면 기본 요원), 라운드 시작 충전, 궁극기 포인트, 캐릭터에 스킬 부여.
+	void EnsureAgent(AValorPlayerState& PlayerState) const;
+	void RefreshAbilityChargesForRound(AValorPlayerState& PlayerState, bool bEconomyReset) const;
+	void AddUltimatePoints(AValorPlayerState* PlayerState, int32 Points) const;
+	void GrantAgentAbilities(class AValorCharacter& Character) const;
 
 	// 스파이크: 지점 확인(없으면 임시 지점), 이전 스파이크 정리, 공격 팀 한 명에게 지급.
 	void EnsureSpikeSites();

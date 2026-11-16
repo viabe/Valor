@@ -21,6 +21,7 @@
 #include "ValorMatchTypes.h"
 #include "EngineUtils.h"
 #include "World/ValorSpike.h"
+#include "AbilitySystem/ValorAgentTypes.h"
 #include "World/ValorSpikeSite.h"
 
 namespace
@@ -163,6 +164,7 @@ void AValorHUD::DrawHUD()
 		if (!bLocalDead)
 		{
 			DrawCredits(TextUIScale);
+			DrawAbilityBar(CenterX, TextUIScale);
 		}
 		DrawBuyMenu(CenterX, TextUIScale);
 	}
@@ -926,7 +928,18 @@ void AValorHUD::DrawBuyMenu(float CenterX, float RequestedUIScale)
 	DrawRect2D(FLinearColor::Black, 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY, 0.55f);
 
 	// 열 수만큼 가로로 늘어서므로, 글자 배율이 커도 화면 너비(96%)를 넘지 않게 줄인다.
-	int32 ColumnCountForFit = 1;
+	// 실드 열 + (요원 스킬을 상점에서 살 수 있으면) 스킬 열.
+	const UValorAgentDefinition* ShopAgent = ValorPlayerState->GetAgent();
+	TArray<EValorAbilitySlot> ShopAbilitySlots;
+	for (int32 SlotIndex = 0; ShopAgent && SlotIndex < ValorAbilityRules::SlotCount; ++SlotIndex)
+	{
+		if (ShopAgent->GetSlot(static_cast<EValorAbilitySlot>(SlotIndex)).Cost > 0)
+		{
+			ShopAbilitySlots.Add(static_cast<EValorAbilitySlot>(SlotIndex));
+		}
+	}
+	const int32 ExtraColumns = 1 + (ShopAbilitySlots.Num() > 0 ? 1 : 0);
+	int32 ColumnCountForFit = ExtraColumns;
 	for (const EValorWeaponCategory Category : {EValorWeaponCategory::Sidearm, EValorWeaponCategory::SMG, EValorWeaponCategory::Shotgun, EValorWeaponCategory::Rifle, EValorWeaponCategory::Sniper, EValorWeaponCategory::Heavy})
 	{
 		ColumnCountForFit += ValorGameState->GetShopWeapons().ContainsByPredicate([Category](const FValorShopWeaponEntry& Entry) { return Entry.Category == Category; }) ? 1 : 0;
@@ -956,7 +969,7 @@ void AValorHUD::DrawBuyMenu(float CenterX, float RequestedUIScale)
 	const float ColumnGap = 12.0f * UIScale;
 	const float ItemHeight = 58.0f * UIScale;
 	const float ItemGap = 8.0f * UIScale;
-	const int32 ColumnCount = Columns.Num() + 1;
+	const int32 ColumnCount = Columns.Num() + ExtraColumns;
 	const float StartX = CenterX - ((((ColumnWidth + ColumnGap) * ColumnCount) - ColumnGap) * 0.5f);
 	const float StartY = HeaderY + (56.0f * UIScale);
 
@@ -1031,6 +1044,24 @@ void AValorHUD::DrawBuyMenu(float CenterX, float RequestedUIScale)
 		DrawItem(ShieldX, StartY + (ShieldIndex * (ItemHeight + ItemGap)), FString::Printf(TEXT("%s %.0f"), *Shields[ShieldIndex].DisplayName, Shields[ShieldIndex].ShieldAmount),
 			Shields[ShieldIndex].Cost, bOwned, bPurchased, FName(*FString::Printf(TEXT("BuyShield_%d"), ShieldIndex)));
 	}
+
+	// 스킬 열: 칸 키 + 이름 + 충전/최대. 가득 차면 보유, 이번 라운드에 산 충전이 있으면 되팔기.
+	if (ShopAbilitySlots.Num() > 0)
+	{
+		static const TCHAR* const SlotKeys[] = {TEXT("C"), TEXT("Q"), TEXT("E"), TEXT("X")};
+		const float AbilityX = ShieldX + ColumnWidth + ColumnGap;
+		DrawShadowedText(TEXT("ABILITIES"), FLinearColor(0.8f, 0.8f, 0.8f, 1.0f), AbilityX, StartY - (24.0f * UIScale), SmallFont, UIScale, 0.0f);
+		for (int32 RowIndex = 0; RowIndex < ShopAbilitySlots.Num(); ++RowIndex)
+		{
+			const EValorAbilitySlot Slot = ShopAbilitySlots[RowIndex];
+			const FValorAbilitySlotConfig& Config = ShopAgent->GetSlot(Slot);
+			const int32 Charges = ValorPlayerState->GetAbilityCharges(Slot);
+			const bool bFull = Charges >= Config.MaxCharges;
+			const FString Label = FString::Printf(TEXT("%s  %s  %d/%d"), SlotKeys[static_cast<int32>(Slot)], *Config.DisplayName.ToString(), Charges, Config.MaxCharges);
+			DrawItem(AbilityX, StartY + (RowIndex * (ItemHeight + ItemGap)), Label, Config.Cost, bFull, ValorPlayerState->HasPurchasedAbilityThisRound(Slot),
+				FName(*FString::Printf(TEXT("BuyAbility_%d"), static_cast<int32>(Slot))));
+		}
+	}
 }
 
 void AValorHUD::NotifyHitBoxClick(FName BoxName)
@@ -1057,6 +1088,21 @@ void AValorHUD::NotifyHitBoxClick(FName BoxName)
 		else
 		{
 			ValorController->ServerBuyWeapon(WeaponClass);
+		}
+	}
+	else if (Name.StartsWith(TEXT("BuyAbility_")) && LexTryParseString(Index, *Name.RightChop(11)) && Index >= 0 && Index < ValorAbilityRules::SlotCount)
+	{
+		// 가득 찼고 이번 라운드에 산 게 있으면 되팔고, 아니면 산다.
+		const EValorAbilitySlot Slot = static_cast<EValorAbilitySlot>(Index);
+		const UValorAgentDefinition* Agent = ValorPlayerState->GetAgent();
+		const bool bFull = Agent && ValorPlayerState->GetAbilityCharges(Slot) >= Agent->GetSlot(Slot).MaxCharges;
+		if (bFull && ValorPlayerState->HasPurchasedAbilityThisRound(Slot))
+		{
+			ValorController->ServerSellAbility(static_cast<uint8>(Index));
+		}
+		else
+		{
+			ValorController->ServerBuyAbility(static_cast<uint8>(Index));
 		}
 	}
 	else if (Name.StartsWith(TEXT("BuyShield_")) && LexTryParseString(Index, *Name.RightChop(10)) && ValorGameState->GetShopShields().IsValidIndex(Index))
@@ -1177,5 +1223,40 @@ void AValorHUD::DrawSpikeStatus(float CenterX, float CenterY, float UIScale)
 	else if (!Prompt.IsEmpty())
 	{
 		DrawShadowedText(Prompt, FLinearColor(1.0f, 1.0f, 1.0f, 0.9f), CenterX, BarY - (28.0f * UIScale), MediumFont, UIScale, 0.5f);
+	}
+}
+
+void AValorHUD::DrawAbilityBar(float CenterX, float UIScale)
+{
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	const UValorAgentDefinition* Agent = ValorPlayerState ? ValorPlayerState->GetAgent() : nullptr;
+	if (!Agent || !GEngine)
+	{
+		return;
+	}
+
+	// 네 칸을 아래 가운데에 나란히: [키] 이름 / 충전(궁극기는 포인트/필요).
+	static const TCHAR* const SlotKeys[] = {TEXT("C"), TEXT("Q"), TEXT("E"), TEXT("X")};
+	const float BoxWidth = 120.0f * UIScale;
+	const float BoxHeight = 46.0f * UIScale;
+	const float Gap = 8.0f * UIScale;
+	const float TotalWidth = (BoxWidth * ValorAbilityRules::SlotCount) + (Gap * (ValorAbilityRules::SlotCount - 1));
+	const float Top = Canvas->ClipY - BoxHeight - (16.0f * UIScale);
+	UFont* SmallFont = GEngine->GetSmallFont();
+
+	for (int32 SlotIndex = 0; SlotIndex < ValorAbilityRules::SlotCount; ++SlotIndex)
+	{
+		const EValorAbilitySlot Slot = static_cast<EValorAbilitySlot>(SlotIndex);
+		const FValorAbilitySlotConfig& Config = Agent->GetSlot(Slot);
+		const bool bUltimate = Config.UltimatePointsRequired > 0;
+		const int32 Charges = ValorPlayerState->GetAbilityCharges(Slot);
+		const bool bReady = bUltimate ? ValorPlayerState->GetUltimatePoints() >= Config.UltimatePointsRequired : Charges > 0;
+		const FString Amount = bUltimate ? FString::Printf(TEXT("%d/%d"), ValorPlayerState->GetUltimatePoints(), Config.UltimatePointsRequired) : FString::Printf(TEXT("x%d"), Charges);
+
+		const float X = CenterX - (TotalWidth * 0.5f) + (SlotIndex * (BoxWidth + Gap));
+		DrawRect2D(bReady ? FLinearColor(0.1f, 0.45f, 0.4f, 1.0f) : FLinearColor::Black, X, Top, BoxWidth, BoxHeight, bReady ? 0.75f : 0.45f);
+		const FLinearColor TextColor = bReady ? FLinearColor::White : FLinearColor(0.6f, 0.6f, 0.6f, 1.0f);
+		DrawShadowedText(FString::Printf(TEXT("%s  %s"), SlotKeys[SlotIndex], *Config.DisplayName.ToString().ToUpper()), TextColor, X + (6.0f * UIScale), Top + (4.0f * UIScale), SmallFont, UIScale, 0.0f);
+		DrawShadowedText(Amount, bReady ? FLinearColor(0.95f, 0.9f, 0.6f, 1.0f) : TextColor, X + BoxWidth - (6.0f * UIScale), Top + BoxHeight - (20.0f * UIScale), SmallFont, UIScale, 1.0f);
 	}
 }

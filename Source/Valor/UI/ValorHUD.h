@@ -193,6 +193,9 @@ private:
 
 	// 스파이크: 지점 표시(A·B와 거리), 스파이크 위치(설치되면 모두, 떨어지면 공격 팀), 설치·해체 안내와 진행 막대.
 	void DrawSpikeStatus(float CenterX, float CenterY, float UIScale);
+
+	// 요원 스킬 칸(C/Q/E/X): 아래 가운데에 이름·충전·궁극기 포인트.
+	void DrawAbilityBar(float CenterX, float UIScale);
 	bool UsesRounds() const;
 
 	// 그림자 있는 텍스트. AlignX: 0 = 왼쪽 정렬, 0.5 = 가운데, 1 = 오른쪽. 그린 높이를 돌려준다(줄 쌓기용).

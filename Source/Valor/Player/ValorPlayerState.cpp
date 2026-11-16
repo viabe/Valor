@@ -13,6 +13,9 @@ void AValorPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(AValorPlayerState, Team);
 	DOREPLIFETIME(AValorPlayerState, Credits);
 	DOREPLIFETIME_CONDITION(AValorPlayerState, RoundPurchases, COND_OwnerOnly);
+	DOREPLIFETIME(AValorPlayerState, AgentClass);
+	DOREPLIFETIME(AValorPlayerState, AbilityCharges);
+	DOREPLIFETIME(AValorPlayerState, UltimatePoints);
 }
 
 void AValorPlayerState::AddKill(bool bHeadshot)
@@ -121,5 +124,67 @@ void AValorPlayerState::ClearRoundPurchases()
 	if (HasAuthority())
 	{
 		RoundPurchases.Reset();
+	}
+}
+
+bool AValorPlayerState::HasPurchasedAbilityThisRound(EValorAbilitySlot Slot) const
+{
+	const int32 SlotIndex = static_cast<int32>(Slot);
+	return RoundPurchases.ContainsByPredicate([SlotIndex](const FValorRoundPurchase& Purchase) { return Purchase.AbilitySlot == SlotIndex; });
+}
+
+bool AValorPlayerState::TakeAbilityPurchase(EValorAbilitySlot Slot, FValorRoundPurchase& OutPurchase)
+{
+	const int32 SlotIndex = static_cast<int32>(Slot);
+	const int32 Index = RoundPurchases.FindLastByPredicate([SlotIndex](const FValorRoundPurchase& Purchase) { return Purchase.AbilitySlot == SlotIndex; });
+	if (!HasAuthority() || Index == INDEX_NONE)
+	{
+		return false;
+	}
+
+	OutPurchase = RoundPurchases[Index];
+	RoundPurchases.RemoveAt(Index);
+	return true;
+}
+
+const UValorAgentDefinition* AValorPlayerState::GetAgent() const
+{
+	return AgentClass ? AgentClass->GetDefaultObject<UValorAgentDefinition>() : nullptr;
+}
+
+int32 AValorPlayerState::GetAbilityCharges(EValorAbilitySlot Slot) const
+{
+	const int32 SlotIndex = static_cast<int32>(Slot);
+	return AbilityCharges.IsValidIndex(SlotIndex) ? AbilityCharges[SlotIndex] : 0;
+}
+
+void AValorPlayerState::SetAgentClass(TSubclassOf<UValorAgentDefinition> NewAgentClass)
+{
+	if (HasAuthority())
+	{
+		AgentClass = NewAgentClass;
+		AbilityCharges.Init(0, ValorAbilityRules::SlotCount);
+	}
+}
+
+void AValorPlayerState::SetAbilityCharges(EValorAbilitySlot Slot, int32 Charges)
+{
+	const int32 SlotIndex = static_cast<int32>(Slot);
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (AbilityCharges.Num() < ValorAbilityRules::SlotCount)
+	{
+		AbilityCharges.SetNumZeroed(ValorAbilityRules::SlotCount);
+	}
+	AbilityCharges[SlotIndex] = FMath::Max(0, Charges);
+}
+
+void AValorPlayerState::SetUltimatePoints(int32 Points)
+{
+	if (HasAuthority())
+	{
+		UltimatePoints = FMath::Max(0, Points);
 	}
 }

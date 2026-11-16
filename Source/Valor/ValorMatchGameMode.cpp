@@ -1,6 +1,9 @@
 #include "ValorMatchGameMode.h"
 
+#include "AbilitySystem/Abilities/ValorAgentAbility.h"
+#include "AbilitySystem/Abilities/ValorSampleAbilities.h"
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
+#include "AbilitySystem/ValorAbilitySystemComponent.h"
 #include "AbilitySystemComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/ValorCombatComponent.h"
@@ -56,6 +59,8 @@ AValorMatchGameMode::AValorMatchGameMode()
 	// 경기 모드는 사서 쓴다: 주무기·실드 기본 지급 없음(칼, 그리고 권총 BP가 생기면 클래식만).
 	StartingWeaponClass = nullptr;
 	SpawnShield = 0.0f;
+
+	DefaultAgentClass = UValorAgent_Drift::StaticClass();
 }
 
 void AValorMatchGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
@@ -153,6 +158,8 @@ void AValorMatchGameMode::HandleStartingNewPlayer_Implementation(APlayerControll
 	const EValorTeam Team = PickTeamForNewPlayer(CountPlayers(EValorTeam::TeamA), CountPlayers(EValorTeam::TeamB));
 	PlayerState->SetTeam(Team);
 	PlayerState->SetCredits(RoundNumber > 0 && ValorMatchRules::IsOvertimeRound(RoundNumber, RoundsPerHalf) ? OvertimeCredits : ValorMatchEconomy::GetEconomyResetCredits(GetValorGameState(), StartingCredits));
+	EnsureAgent(*PlayerState);
+	RefreshAbilityChargesForRound(*PlayerState, true);
 	UE_LOG(LogValorMatch, Log, TEXT("%s 접속 → %s"), *PlayerState->GetPlayerName(), Team == EValorTeam::TeamA ? TEXT("TeamA") : TEXT("TeamB"));
 
 	// 첫 플레이어가 들어오면 잠시(다른 접속을 기다리는 시간) 뒤 첫 라운드를 시작한다.
@@ -240,6 +247,8 @@ void AValorMatchGameMode::AddBot(EValorTeam Team)
 	PlayerState->SetPlayerName(FString::Printf(TEXT("Bot %d"), ++BotCount));
 	PlayerState->SetTeam(Team);
 	PlayerState->SetCredits(ValorMatchEconomy::GetEconomyResetCredits(GetValorGameState(), StartingCredits));
+	EnsureAgent(*PlayerState);
+	RefreshAbilityChargesForRound(*PlayerState, true);
 	UE_LOG(LogValorMatch, Log, TEXT("%s 추가 → %s"), *PlayerState->GetPlayerName(), Team == EValorTeam::TeamA ? TEXT("TeamA") : TEXT("TeamB"));
 
 	if (CurrentPhase == EValorRoundPhase::WaitingToStart || CurrentPhase == EValorRoundPhase::BuyPhase)
@@ -352,6 +361,8 @@ void AValorMatchGameMode::BeginRound()
 	{
 		AValorPlayerState* PlayerState = Controller->GetPlayerState<AValorPlayerState>();
 		PlayerState->ClearRoundPurchases();
+		EnsureAgent(*PlayerState);
+		RefreshAbilityChargesForRound(*PlayerState, bEconomyReset);
 		if (bEconomyReset)
 		{
 			PlayerState->SetCredits(ValorMatchEconomy::GetEconomyResetCredits(GetValorGameState(), StartingCredits));
@@ -464,6 +475,7 @@ void AValorMatchGameMode::ResetMatch()
 	for (AController* Controller : Controllers)
 	{
 		Controller->GetPlayerState<AValorPlayerState>()->ResetScore();
+		Controller->GetPlayerState<AValorPlayerState>()->SetUltimatePoints(0);
 	}
 
 	BeginRound();
@@ -475,7 +487,11 @@ void AValorMatchGameMode::OnCharacterKilled(AValorCharacter* Victim, AController
 	if (KillerState && VictimState && !bSelfKill && KillerState->GetTeam() != EValorTeam::None && KillerState->GetTeam() != VictimState->GetTeam())
 	{
 		KillerState->AddCredits(KillReward);
+		AddUltimatePoints(KillerState, UltimatePointsPerEvent);
 	}
+
+	// 궁극기 포인트: 죽은 사람도 1점(장르 공통 규칙: 지는 쪽도 궁극기를 모은다).
+	AddUltimatePoints(VictimState, UltimatePointsPerEvent);
 
 	CheckElimination();
 }
@@ -684,6 +700,10 @@ void AValorMatchGameMode::SetPlayerDefaults(APawn* PlayerPawn)
 
 	AValorCharacter* Character = Cast<AValorCharacter>(PlayerPawn);
 	AValorPlayerState* PlayerState = Character ? Character->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (Character)
+	{
+		GrantAgentAbilities(*Character);
+	}
 	if (!PlayerState || !PlayerState->CarriedLoadout.bValid)
 	{
 		return;
@@ -994,6 +1014,7 @@ void AValorMatchGameMode::HandleSpikePlanted(AValorCharacter* Planter)
 		}
 	}
 
+	AddUltimatePoints(Planter ? Planter->GetPlayerState<AValorPlayerState>() : nullptr, UltimatePointsPerEvent);
 	const AValorSpike* Spike = AValorSpike::FindSpike(GetWorld());
 	UE_LOG(LogValorMatch, Log, TEXT("스파이크 설치: %s, 지점 %s, 폭발까지 %.0f초"), *GetNameSafe(Planter ? Planter->GetPlayerState() : nullptr),
 		Spike ? *Spike->GetPlantedSiteName().ToString() : TEXT("?"), SpikeDetonationSeconds);
@@ -1011,5 +1032,125 @@ void AValorMatchGameMode::HandleSpikeDefused(AValorCharacter* Defuser)
 	}
 
 	UE_LOG(LogValorMatch, Log, TEXT("스파이크 해체: %s"), *GetNameSafe(Defuser ? Defuser->GetPlayerState() : nullptr));
+	AddUltimatePoints(Defuser ? Defuser->GetPlayerState<AValorPlayerState>() : nullptr, UltimatePointsPerEvent);
 	EndRound(ValorTeams::GetOpposingTeam(ValorGameState->GetAttackingTeam()), EValorRoundEndReason::SpikeDefused);
+}
+
+// ======================================================================================
+// 요원·스킬
+// ======================================================================================
+
+void AValorMatchGameMode::EnsureAgent(AValorPlayerState& PlayerState) const
+{
+	if (!PlayerState.GetAgentClass() && DefaultAgentClass)
+	{
+		PlayerState.SetAgentClass(DefaultAgentClass);
+	}
+}
+
+void AValorMatchGameMode::RefreshAbilityChargesForRound(AValorPlayerState& PlayerState, bool bEconomyReset) const
+{
+	const UValorAgentDefinition* Agent = PlayerState.GetAgent();
+	if (!Agent)
+	{
+		return;
+	}
+
+	// 궁극기 칸은 충전이 아니라 포인트를 쓴다. 나머지 칸: 경제 초기화면 무료 충전만, 아니면 가진 것을 유지하되 무료 충전만큼 채운다.
+	for (int32 SlotIndex = 0; SlotIndex < ValorAbilityRules::SlotCount; ++SlotIndex)
+	{
+		const EValorAbilitySlot Slot = static_cast<EValorAbilitySlot>(SlotIndex);
+		const FValorAbilitySlotConfig& Config = Agent->GetSlot(Slot);
+		if (Config.UltimatePointsRequired > 0)
+		{
+			continue;
+		}
+		PlayerState.SetAbilityCharges(Slot, ValorAbilityRules::ChargesAtRoundStart(PlayerState.GetAbilityCharges(Slot), Config.FreeChargesPerRound, Config.MaxCharges, bEconomyReset));
+	}
+}
+
+void AValorMatchGameMode::AddUltimatePoints(AValorPlayerState* PlayerState, int32 Points) const
+{
+	const UValorAgentDefinition* Agent = PlayerState ? PlayerState->GetAgent() : nullptr;
+	if (Agent && Points > 0)
+	{
+		PlayerState->SetUltimatePoints(ValorAbilityRules::AddUltimatePoints(PlayerState->GetUltimatePoints(), Points, Agent->Ultimate.UltimatePointsRequired));
+	}
+}
+
+void AValorMatchGameMode::GrantAgentAbilities(AValorCharacter& Character) const
+{
+	const AValorPlayerState* PlayerState = Character.GetPlayerState<AValorPlayerState>();
+	const UValorAgentDefinition* Agent = PlayerState ? PlayerState->GetAgent() : nullptr;
+	UAbilitySystemComponent* AbilitySystem = Character.GetAbilitySystemComponent();
+	if (!Agent || !AbilitySystem)
+	{
+		return;
+	}
+
+	// 캐릭터(ASC)는 스폰마다 새로 만들어지므로 매번 네 칸을 부여한다. 칸은 InputID로 구분한다(C/Q/E/X 입력이 이 번호로 스킬을 찾는다).
+	for (int32 SlotIndex = 0; SlotIndex < ValorAbilityRules::SlotCount; ++SlotIndex)
+	{
+		const EValorAbilitySlot Slot = static_cast<EValorAbilitySlot>(SlotIndex);
+		const FValorAbilitySlotConfig& Config = Agent->GetSlot(Slot);
+		if (Config.AbilityClass)
+		{
+			AbilitySystem->GiveAbility(FGameplayAbilitySpec(Config.AbilityClass, 1, UValorAgentAbility::InputIdForSlot(Slot), &Character));
+		}
+	}
+}
+
+bool AValorMatchGameMode::TryBuyAbility(AController* Buyer, EValorAbilitySlot Slot)
+{
+	AValorCharacter* Character = nullptr;
+	AValorPlayerState* PlayerState = nullptr;
+	if (!GetBuyContext(Buyer, Character, PlayerState) || !PlayerState->GetAgent())
+	{
+		return false;
+	}
+
+	const FValorAbilitySlotConfig& Config = PlayerState->GetAgent()->GetSlot(Slot);
+	const int32 Charges = PlayerState->GetAbilityCharges(Slot);
+	if (!ValorAbilityRules::CanBuyCharge(Charges, Config.MaxCharges, Config.Cost, PlayerState->GetCredits()))
+	{
+		return false;
+	}
+
+	PlayerState->AddCredits(-Config.Cost);
+	PlayerState->SetAbilityCharges(Slot, Charges + 1);
+
+	FValorRoundPurchase Purchase;
+	Purchase.AbilitySlot = static_cast<int32>(Slot);
+	Purchase.Cost = Config.Cost;
+	PlayerState->AddRoundPurchase(Purchase);
+	return true;
+}
+
+bool AValorMatchGameMode::TrySellAbility(AController* Buyer, EValorAbilitySlot Slot)
+{
+	AValorCharacter* Character = nullptr;
+	AValorPlayerState* PlayerState = nullptr;
+	if (!GetBuyContext(Buyer, Character, PlayerState) || PlayerState->GetAbilityCharges(Slot) <= 0)
+	{
+		return false;
+	}
+
+	// 이번 라운드에 산 충전만, 아직 쓰지 않았을 때 되판다.
+	FValorRoundPurchase Purchase;
+	if (!PlayerState->TakeAbilityPurchase(Slot, Purchase))
+	{
+		return false;
+	}
+
+	PlayerState->SetAbilityCharges(Slot, PlayerState->GetAbilityCharges(Slot) - 1);
+	PlayerState->AddCredits(Purchase.Cost);
+	return true;
+}
+
+void AValorMatchGameMode::DebugSetUltimatePoints(AController* Target, int32 Points)
+{
+	if (AValorPlayerState* PlayerState = Target ? Target->GetPlayerState<AValorPlayerState>() : nullptr)
+	{
+		PlayerState->SetUltimatePoints(Points);
+	}
 }

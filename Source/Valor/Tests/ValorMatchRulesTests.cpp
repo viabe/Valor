@@ -1,6 +1,7 @@
 #include "Misc/AutomationTest.h"
 #include "ValorMatchGameMode.h"
 #include "ValorMatchTypes.h"
+#include "AbilitySystem/ValorAgentTypes.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -108,6 +109,28 @@ bool FValorSpikeRulesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("끊기면 3.5부터"), Progress, 3.5f);
 	Progress = ValorSpikeRules::AdvanceDefuse(Progress, Checkpoint, 3.5f, true, 7.0f);
 	TestEqual(TEXT("이어서 7초 완료"), Progress, 7.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FValorAbilityRulesTest, "Valor.Match.Rules.Abilities", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FValorAbilityRulesTest::RunTest(const FString& Parameters)
+{
+	// 라운드 시작 충전: 경제 초기화면 무료 충전만, 아니면 남은 것 유지 + 무료 충전만큼은 채움.
+	TestEqual(TEXT("1라운드 시그니처: 무료 1"), ValorAbilityRules::ChargesAtRoundStart(0, 1, 1, true), 1);
+	TestEqual(TEXT("1라운드 일반 스킬: 0"), ValorAbilityRules::ChargesAtRoundStart(2, 0, 2, true), 0);
+	TestEqual(TEXT("다음 라운드: 남은 2 유지"), ValorAbilityRules::ChargesAtRoundStart(2, 0, 2, false), 2);
+	TestEqual(TEXT("다음 라운드 시그니처: 썼으면 다시 1"), ValorAbilityRules::ChargesAtRoundStart(0, 1, 1, false), 1);
+	TestEqual(TEXT("최대를 넘지 않음"), ValorAbilityRules::ChargesAtRoundStart(5, 0, 2, false), 2);
+
+	// 구매: 판매 칸, 최대 미만, 크레딧 충분.
+	TestTrue(TEXT("살 수 있음"), ValorAbilityRules::CanBuyCharge(0, 2, 100, 100));
+	TestFalse(TEXT("최대면 못 삼"), ValorAbilityRules::CanBuyCharge(2, 2, 100, 9000));
+	TestFalse(TEXT("돈 부족"), ValorAbilityRules::CanBuyCharge(0, 2, 200, 199));
+	TestFalse(TEXT("판매하지 않는 칸(가격 0)"), ValorAbilityRules::CanBuyCharge(0, 1, 0, 9000));
+
+	// 궁극기 포인트는 필요 포인트에서 멈춘다.
+	TestEqual(TEXT("포인트 +1"), ValorAbilityRules::AddUltimatePoints(3, 1, 6), 4);
+	TestEqual(TEXT("필요 포인트에서 멈춤"), ValorAbilityRules::AddUltimatePoints(6, 1, 6), 6);
 	return true;
 }
 

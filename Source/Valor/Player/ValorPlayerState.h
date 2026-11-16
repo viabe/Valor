@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
+#include "AbilitySystem/ValorAgentTypes.h"
 #include "ValorMatchTypes.h"
 #include "ValorPlayerState.generated.h"
 
@@ -20,6 +21,10 @@ struct FValorRoundPurchase
 	// 실드 구매면 상점 실드 목록 번호, 아니면 INDEX_NONE.
 	UPROPERTY()
 	int32 ShieldIndex = INDEX_NONE;
+
+	// 스킬 충전 구매면 스킬 칸(EValorAbilitySlot), 아니면 INDEX_NONE.
+	UPROPERTY()
+	int32 AbilitySlot = INDEX_NONE;
 
 	UPROPERTY()
 	int32 Cost = 0;
@@ -89,6 +94,8 @@ public:
 	const TArray<FValorRoundPurchase>& GetRoundPurchases() const { return RoundPurchases; }
 	bool HasPurchasedWeaponThisRound(const UClass* WeaponClass) const;
 	bool HasPurchasedShieldThisRound(int32 ShieldIndex) const;
+	bool HasPurchasedAbilityThisRound(EValorAbilitySlot Slot) const;
+	bool TakeAbilityPurchase(EValorAbilitySlot Slot, FValorRoundPurchase& OutPurchase);
 
 	// 서버 전용.
 	void AddRoundPurchase(const FValorRoundPurchase& Purchase);
@@ -99,6 +106,18 @@ public:
 
 	// 서버 전용: 다음 라운드로 가져갈 장비.
 	FValorCarriedLoadout CarriedLoadout;
+
+	// === 요원·스킬 ===
+	// 스킬 충전과 궁극기 포인트는 캐릭터가 아니라 여기 둔다(죽고 다시 스폰돼도 남는다).
+	TSubclassOf<UValorAgentDefinition> GetAgentClass() const { return AgentClass; }
+	const UValorAgentDefinition* GetAgent() const;
+	int32 GetAbilityCharges(EValorAbilitySlot Slot) const;
+	int32 GetUltimatePoints() const { return UltimatePoints; }
+
+	// 서버 전용.
+	void SetAgentClass(TSubclassOf<UValorAgentDefinition> NewAgentClass);
+	void SetAbilityCharges(EValorAbilitySlot Slot, int32 Charges);
+	void SetUltimatePoints(int32 Points);
 
 protected:
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Score")
@@ -118,4 +137,14 @@ protected:
 
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Match")
 	TArray<FValorRoundPurchase> RoundPurchases;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Agent")
+	TSubclassOf<UValorAgentDefinition> AgentClass;
+
+	// 스킬 칸별 충전 수(EValorAbilitySlot 순서). 모두에게 복제한다(아군 화면·관전 표시).
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Agent")
+	TArray<int32> AbilityCharges;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Agent")
+	int32 UltimatePoints = 0;
 };

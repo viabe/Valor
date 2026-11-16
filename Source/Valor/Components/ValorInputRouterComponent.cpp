@@ -129,6 +129,11 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 	DropWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_DropWeapon"));
 	BuyMenuAction = FindOrCreateBooleanAction(Outer, TEXT("IA_BuyMenu"));
 	UseSpikeAction = FindOrCreateBooleanAction(Outer, TEXT("IA_UseSpike"));
+	AbilityActions = {
+		FindOrCreateBooleanAction(Outer, TEXT("IA_Ability1")),
+		FindOrCreateBooleanAction(Outer, TEXT("IA_Ability2")),
+		FindOrCreateBooleanAction(Outer, TEXT("IA_Signature")),
+		FindOrCreateBooleanAction(Outer, TEXT("IA_Ultimate"))};
 
 	if (!WeaponSlotMappingContext)
 	{
@@ -143,6 +148,10 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 		WeaponSlotMappingContext->MapKey(DropWeaponAction, EKeys::G);
 		WeaponSlotMappingContext->MapKey(BuyMenuAction, EKeys::B);
 		WeaponSlotMappingContext->MapKey(UseSpikeAction, EKeys::Four);
+		WeaponSlotMappingContext->MapKey(AbilityActions[0], EKeys::C);
+		WeaponSlotMappingContext->MapKey(AbilityActions[1], EKeys::Q);
+		WeaponSlotMappingContext->MapKey(AbilityActions[2], EKeys::E);
+		WeaponSlotMappingContext->MapKey(AbilityActions[3], EKeys::X);
 	}
 
 	if (Subsystem)
@@ -161,6 +170,14 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleUseSpikeStarted);
 	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleUseSpikeCompleted);
 	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Canceled, this, &UValorInputRouterComponent::HandleUseSpikeCompleted);
+	EnhancedInputComponent->BindAction(AbilityActions[0], ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleAbility1Started);
+	EnhancedInputComponent->BindAction(AbilityActions[0], ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleAbility1Completed);
+	EnhancedInputComponent->BindAction(AbilityActions[1], ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleAbility2Started);
+	EnhancedInputComponent->BindAction(AbilityActions[1], ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleAbility2Completed);
+	EnhancedInputComponent->BindAction(AbilityActions[2], ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleSignatureStarted);
+	EnhancedInputComponent->BindAction(AbilityActions[2], ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleSignatureCompleted);
+	EnhancedInputComponent->BindAction(AbilityActions[3], ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleUltimateStarted);
+	EnhancedInputComponent->BindAction(AbilityActions[3], ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleUltimateCompleted);
 }
 
 void UValorInputRouterComponent::HandleMove(const FInputActionValue& Value)
@@ -345,5 +362,13 @@ void UValorInputRouterComponent::HandleUseSpikeCompleted(const FInputActionValue
 	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
 	{
 		OwnerCharacter->HandleSpikeInputReleased();
+	}
+}
+
+void UValorInputRouterComponent::HandleAbility(uint8 Slot, bool bPressed)
+{
+	if (AValorCharacter* OwnerCharacter = Cast<AValorCharacter>(GetOwner()))
+	{
+		OwnerCharacter->HandleAbilityInput(Slot, bPressed);
 	}
 }

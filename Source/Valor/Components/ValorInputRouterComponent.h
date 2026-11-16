@@ -58,6 +58,15 @@ private:
 	void HandleDropWeaponStarted(const FInputActionValue& Value);
 	void HandleBuyMenuStarted(const FInputActionValue& Value);
 	void HandleUseSpikeStarted(const FInputActionValue& Value);
+	void HandleAbility1Started(const FInputActionValue& Value) { HandleAbility(0, true); }
+	void HandleAbility1Completed(const FInputActionValue& Value) { HandleAbility(0, false); }
+	void HandleAbility2Started(const FInputActionValue& Value) { HandleAbility(1, true); }
+	void HandleAbility2Completed(const FInputActionValue& Value) { HandleAbility(1, false); }
+	void HandleSignatureStarted(const FInputActionValue& Value) { HandleAbility(2, true); }
+	void HandleSignatureCompleted(const FInputActionValue& Value) { HandleAbility(2, false); }
+	void HandleUltimateStarted(const FInputActionValue& Value) { HandleAbility(3, true); }
+	void HandleUltimateCompleted(const FInputActionValue& Value) { HandleAbility(3, false); }
+	void HandleAbility(uint8 Slot, bool bPressed);
 	void HandleUseSpikeCompleted(const FInputActionValue& Value);
 
 	// 무기 슬롯 입력 컨텍스트와 액션(로컬 플레이어에서만 런타임 생성). UPROPERTY로 GC에서 보호한다.
@@ -89,4 +98,8 @@ private:
 	// 스파이크 사용(4 키 홀드: 설치·해체).
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> UseSpikeAction;
+
+	// 요원 스킬 C / Q / E / X.
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UInputAction>> AbilityActions;
 };

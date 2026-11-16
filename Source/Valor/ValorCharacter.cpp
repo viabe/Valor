@@ -1,6 +1,7 @@
 #include "ValorCharacter.h"
 
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
+#include "AbilitySystem/Abilities/ValorAgentAbility.h"
 #include "AbilitySystem/ValorAbilitySystemComponent.h"
 #include "AbilitySystem/ValorDamageTypes.h"
 #include "AbilitySystem/ValorGameplayTags.h"
@@ -326,6 +327,25 @@ void AValorCharacter::HandleADSInputPressed()
 	if (CombatComponent && !IsBuyMenuOpen())
 	{
 		CombatComponent->HandleADSInputPressed();
+	}
+}
+
+void AValorCharacter::HandleAbilityInput(uint8 Slot, bool bPressed)
+{
+	// 죽었거나 구매 메뉴가 열려 있으면 쓰지 않는다(사망은 어빌리티 쪽 State.Dead 태그로도 막힌다).
+	if (!AbilitySystemComponent || (bPressed && (!IsAlive() || IsBuyMenuOpen())))
+	{
+		return;
+	}
+
+	const int32 InputId = UValorAgentAbility::InputIdBase + Slot;
+	if (bPressed)
+	{
+		AbilitySystemComponent->AbilityLocalInputPressed(InputId);
+	}
+	else
+	{
+		AbilitySystemComponent->AbilityLocalInputReleased(InputId);
 	}
 }
 

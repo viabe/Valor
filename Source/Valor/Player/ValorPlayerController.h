@@ -101,6 +101,13 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerSellShield(int32 ShieldIndex);
 
+	// 스킬 충전 구매·되팔기(칸 번호 = EValorAbilitySlot).
+	UFUNCTION(Server, Reliable)
+	void ServerBuyAbility(uint8 Slot);
+
+	UFUNCTION(Server, Reliable)
+	void ServerSellAbility(uint8 Slot);
+
 	virtual void PlayerTick(float DeltaTime) override;
 
 	// === 개발용 콘솔 명령(경기 모드 테스트). 출시 빌드에서는 서버가 무시한다 ===
@@ -125,6 +132,13 @@ public:
 	// ValorKillMe: 내 캐릭터를 즉사시킨다(관전 확인용).
 	UFUNCTION(Exec)
 	void ValorKillMe();
+
+	// ValorUltPoints 6: 내 궁극기 포인트를 정한다.
+	UFUNCTION(Exec)
+	void ValorUltPoints(int32 Points);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDebugSetUltimatePoints(int32 Points);
 
 	UFUNCTION(Server, Reliable)
 	void ServerDebugAddBot(uint8 Team);

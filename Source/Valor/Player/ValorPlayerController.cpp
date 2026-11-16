@@ -411,3 +411,38 @@ void AValorPlayerController::UpdateSpectateCamera(float DeltaTime, bool bSnap)
 	const FVector Smoothed = (bSnap || DeltaTime <= 0.0f) ? CameraLocation : FMath::VInterpTo(SpectateCamera->GetActorLocation(), CameraLocation, DeltaTime, 25.0f);
 	SpectateCamera->SetActorLocationAndRotation(Smoothed, AimRotation);
 }
+
+// ======================================================================================
+// 스킬 상점, 궁극기 포인트(개발용)
+// ======================================================================================
+
+void AValorPlayerController::ServerBuyAbility_Implementation(uint8 Slot)
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TryBuyAbility(this, static_cast<EValorAbilitySlot>(FMath::Min<uint8>(Slot, ValorAbilityRules::SlotCount - 1)));
+	}
+}
+
+void AValorPlayerController::ServerSellAbility_Implementation(uint8 Slot)
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TrySellAbility(this, static_cast<EValorAbilitySlot>(FMath::Min<uint8>(Slot, ValorAbilityRules::SlotCount - 1)));
+	}
+}
+
+void AValorPlayerController::ValorUltPoints(int32 Points)
+{
+	ServerDebugSetUltimatePoints(Points);
+}
+
+void AValorPlayerController::ServerDebugSetUltimatePoints_Implementation(int32 Points)
+{
+#if !UE_BUILD_SHIPPING
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->DebugSetUltimatePoints(this, Points);
+	}
+#endif
+}
