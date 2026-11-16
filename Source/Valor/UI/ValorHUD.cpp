@@ -158,6 +158,7 @@ void AValorHUD::DrawHUD()
 
 	if (UsesRounds())
 	{
+		DrawRevealedEnemies(TextUIScale);
 		DrawSpikeStatus(CenterX, CenterY, TextUIScale);
 		DrawMatchStatus(CenterX, TextUIScale);
 		DrawRoundBanner(CenterX, CenterY, TextUIScale);
@@ -168,6 +169,9 @@ void AValorHUD::DrawHUD()
 		}
 		DrawBuyMenu(CenterX, TextUIScale);
 	}
+
+	// 섬광 눈부심은 모든 HUD 위에 덮는다(맨 마지막).
+	DrawFlashOverlay();
 }
 
 void AValorHUD::DrawCrosshairLines(float CenterX, float CenterY, float Length, float Thickness, float Offset, float Opacity)
@@ -1258,5 +1262,41 @@ void AValorHUD::DrawAbilityBar(float CenterX, float UIScale)
 		const FLinearColor TextColor = bReady ? FLinearColor::White : FLinearColor(0.6f, 0.6f, 0.6f, 1.0f);
 		DrawShadowedText(FString::Printf(TEXT("%s  %s"), SlotKeys[SlotIndex], *Config.DisplayName.ToString().ToUpper()), TextColor, X + (6.0f * UIScale), Top + (4.0f * UIScale), SmallFont, UIScale, 0.0f);
 		DrawShadowedText(Amount, bReady ? FLinearColor(0.95f, 0.9f, 0.6f, 1.0f) : TextColor, X + BoxWidth - (6.0f * UIScale), Top + BoxHeight - (20.0f * UIScale), SmallFont, UIScale, 1.0f);
+	}
+}
+
+void AValorHUD::DrawRevealedEnemies(float UIScale)
+{
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	const EValorTeam LocalTeam = ValorPlayerState ? ValorPlayerState->GetTeam() : EValorTeam::None;
+	if (LocalTeam == EValorTeam::None || !GEngine)
+	{
+		return;
+	}
+
+	for (TActorIterator<AValorCharacter> It(GetWorld()); It; ++It)
+	{
+		if (!It->IsRevealedTo(LocalTeam))
+		{
+			continue;
+		}
+
+		const FVector Screen = Project(It->GetActorLocation() + FVector(0.0f, 0.0f, 110.0f));
+		if (Screen.Z > 0.0f)
+		{
+			const float Size = 12.0f * UIScale;
+			DrawRect2D(FLinearColor(1.0f, 0.2f, 0.2f, 1.0f), Screen.X - (Size * 0.5f), Screen.Y - Size, Size, Size, 0.9f);
+			DrawShadowedText(TEXT("SPOTTED"), FLinearColor(1.0f, 0.35f, 0.35f, 1.0f), Screen.X, Screen.Y + (2.0f * UIScale), GEngine->GetSmallFont(), UIScale, 0.5f);
+		}
+	}
+}
+
+void AValorHUD::DrawFlashOverlay()
+{
+	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+	const float Alpha = ValorController ? ValorController->GetFlashAlpha() : 0.0f;
+	if (Alpha > 0.0f)
+	{
+		DrawRect2D(FLinearColor::White, 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY, Alpha);
 	}
 }

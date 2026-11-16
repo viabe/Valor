@@ -82,6 +82,13 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientNotifyKilled(const FValorDeathInfo& DeathInfo);
 
+	// 섬광에 눈이 부심(서버가 시선·가림으로 시간을 정해 이 플레이어에게만 보낸다). 화면 연출만 한다.
+	UFUNCTION(Client, Reliable)
+	void ClientFlashed(float Seconds);
+
+	// 지금 눈부심 세기(0~1). 처음 70%는 하얗게 가득, 남은 시간에 걸쳐 걷힌다.
+	float GetFlashAlpha() const;
+
 	// === 상점 ===
 	// 구매 메뉴(로컬 화면). 구매 단계에 살아 있을 때만 열린다. 열려 있으면 마우스 커서가 보이고 시점 회전이 멈춘다.
 	void ToggleBuyMenu();
@@ -136,6 +143,13 @@ public:
 	// ValorUltPoints 6: 내 궁극기 포인트를 정한다.
 	UFUNCTION(Exec)
 	void ValorUltPoints(int32 Points);
+
+	// ValorAgent Flare: 요원을 바꾼다(요원 선택 화면 전 개발용).
+	UFUNCTION(Exec)
+	void ValorAgent(const FString& AgentName);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDebugSetAgent(const FString& AgentName);
 
 	UFUNCTION(Server, Reliable)
 	void ServerDebugSetUltimatePoints(int32 Points);
@@ -204,6 +218,9 @@ private:
 	bool bHasDeathInfo = false;
 
 	bool bBuyMenuOpen = false;
+
+	double FlashStartTime = -1.0;
+	float FlashSeconds = 0.0f;
 
 	// 관전
 	void CycleSpectate(int32 Direction);

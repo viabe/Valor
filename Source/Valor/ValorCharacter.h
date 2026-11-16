@@ -6,6 +6,7 @@
 #include "GameFramework/Character.h"
 #include "Interfaces/ValorWeaponOwnerInterface.h"
 #include "Weapons/ValorInventoryTypes.h"
+#include "ValorMatchTypes.h"
 #include "ValorCharacter.generated.h"
 
 class UAbilitySystemComponent;
@@ -170,6 +171,10 @@ public:
 
 	// 서버 전용: 환경 원인(스파이크 폭발 등)으로 즉사시킨다. 킬피드에는 처치자 없이 나온다.
 	void KillByEnvironment(AActor* Causer);
+
+	// 정찰 표시: 이 캐릭터의 위치를 그 팀 화면에 Seconds 동안 보여 준다(서버 전용). 가장 최근 표시 하나만 기억한다.
+	void RevealToTeam(EValorTeam Team, float Seconds);
+	bool IsRevealedTo(EValorTeam Team) const;
 	void HandleFireInputReleased();
 	void HandleReloadInputPressed();
 	void HandleADSInputPressed();
@@ -259,6 +264,13 @@ protected:
 
 	// 사망 상태. 서버만 true로 바꾸고 모두에게 복제한다(시체 래그돌·입력 차단·HUD 사망 화면이 이 값으로 갈린다).
 	// 체력 0 복제만으로도 알 수 있지만, "사망 처리 완료"라는 별도 사건이 있어야 래그돌/드롭이 정확히 한 번 일어난다.
+	// 정찰 표시(모두에게 복제): 어느 팀에, 언제까지(서버 월드 시간).
+	UPROPERTY(Replicated)
+	EValorTeam RevealedToTeam = EValorTeam::None;
+
+	UPROPERTY(Replicated)
+	float RevealEndServerTime = 0.0f;
+
 	UPROPERTY(ReplicatedUsing=OnRep_IsDead, VisibleInstanceOnly, BlueprintReadOnly, Category = "Valor|Death")
 	bool bIsDead = false;
 

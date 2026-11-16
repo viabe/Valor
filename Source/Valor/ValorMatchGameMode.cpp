@@ -19,6 +19,7 @@
 #include "ValorCharacter.h"
 #include "ValorGameState.h"
 #include "Weapons/ValorWeaponBase.h"
+#include "World/ValorAbilityActor.h"
 #include "World/ValorSpike.h"
 #include "World/ValorSpikeSite.h"
 #include "World/ValorWeaponPickup.h"
@@ -61,6 +62,7 @@ AValorMatchGameMode::AValorMatchGameMode()
 	SpawnShield = 0.0f;
 
 	DefaultAgentClass = UValorAgent_Drift::StaticClass();
+	AvailableAgents = {UValorAgent_Drift::StaticClass(), UValorAgent_Flare::StaticClass()};
 }
 
 void AValorMatchGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
@@ -352,6 +354,9 @@ void AValorMatchGameMode::BeginRound()
 	}
 
 	RebuildSpawnBases();
+
+	// 지난 라운드의 스킬 물체(연막·벽·투척물 등)를 치운다.
+	AValorAbilityActor::DestroyAll(GetWorld());
 
 	TArray<AController*> Controllers;
 	GetMatchPlayers(Controllers);
@@ -1153,4 +1158,42 @@ void AValorMatchGameMode::DebugSetUltimatePoints(AController* Target, int32 Poin
 	{
 		PlayerState->SetUltimatePoints(Points);
 	}
+}
+
+bool AValorMatchGameMode::SetAgentByName(AController* Target, const FString& AgentName)
+{
+	AValorPlayerState* PlayerState = Target ? Target->GetPlayerState<AValorPlayerState>() : nullptr;
+	const TSubclassOf<UValorAgentDefinition>* Found = AvailableAgents.FindByPredicate([&AgentName](const TSubclassOf<UValorAgentDefinition>& AgentClass)
+	{
+		return AgentClass && AgentClass->GetDefaultObject<UValorAgentDefinition>()->DisplayName.ToString().Equals(AgentName, ESearchCase::IgnoreCase);
+	});
+	if (!PlayerState || !Found)
+	{
+		return false;
+	}
+
+	PlayerState->SetAgentClass(*Found);
+	RefreshAbilityChargesForRound(*PlayerState, true);
+
+	// 지금 캐릭터의 스킬 네 칸을 새 요원 것으로 바꾼다(무기 어빌리티는 그대로).
+	if (AValorCharacter* Character = Cast<AValorCharacter>(Target->GetPawn()))
+	{
+		if (UAbilitySystemComponent* AbilitySystem = Character->GetAbilitySystemComponent())
+		{
+			TArray<FGameplayAbilitySpecHandle> ToClear;
+			for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+			{
+				if (Spec.InputID >= UValorAgentAbility::InputIdBase)
+				{
+					ToClear.Add(Spec.Handle);
+				}
+			}
+			for (const FGameplayAbilitySpecHandle& Handle : ToClear)
+			{
+				AbilitySystem->ClearAbility(Handle);
+			}
+		}
+		GrantAgentAbilities(*Character);
+	}
+	return true;
 }

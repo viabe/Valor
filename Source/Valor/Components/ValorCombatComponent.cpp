@@ -21,6 +21,7 @@
 #include "ValorGameState.h"
 #include "ValorMatchTypes.h"
 #include "World/ValorSpike.h"
+#include "World/ValorAbilityEffects.h"
 #include "Weapons/ValorMeleeWeapon.h"
 #include "Weapons/ValorWeaponBase.h"
 #include "World/ValorWeaponPickup.h"
@@ -601,6 +602,14 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 		{
 			FValorHitScanResult HitResult;
 			PerformHitScan(RayStart, RayDirection, MaxDistance, ShotTime, true, HitResult);
+
+			// 스킬 벽까지 간 탄: 그 무기의 몸통 피해를 벽에 준다. 벽 앞 캐릭터에 막힌 탄은 벽에 닿지 않는다
+			// (캐릭터가 없거나, 벽을 뚫고 너머 캐릭터에 맞은 관통 탄만 벽을 깎는다).
+			AValorAbilityWall* Wall = Cast<AValorAbilityWall>(HitResult.WorldBlockingActor.Get());
+			if (Wall && (!HitResult.HitCharacter || HitResult.bPenetratedSurface))
+			{
+				Wall->ApplyWallDamage(EquippedWeapon->ComputeDamage(HitResult.TravelDistance, EValorHitZone::Body));
+			}
 
 			if (HitResult.HitCharacter)
 			{
@@ -1830,6 +1839,7 @@ void UValorCombatComponent::PerformHitScan(const FVector& TraceStart, const FVec
 	{
 		BlockingDistance = WorldBlockingHit.Distance;
 		bBlockedByWorld = true;
+		OutResult.WorldBlockingActor = WorldBlockingHit.GetActor();
 		OutResult.bBlockingHit = true;
 		OutResult.ImpactPoint = WorldBlockingHit.ImpactPoint;
 		OutResult.ImpactNormal = WorldBlockingHit.ImpactNormal;

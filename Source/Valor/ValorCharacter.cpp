@@ -2,6 +2,7 @@
 
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
 #include "AbilitySystem/Abilities/ValorAgentAbility.h"
+#include "GameFramework/GameStateBase.h"
 #include "AbilitySystem/ValorAbilitySystemComponent.h"
 #include "AbilitySystem/ValorDamageTypes.h"
 #include "AbilitySystem/ValorGameplayTags.h"
@@ -130,6 +131,8 @@ void AValorCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AValorCharacter, bIsDead);
+	DOREPLIFETIME(AValorCharacter, RevealedToTeam);
+	DOREPLIFETIME(AValorCharacter, RevealEndServerTime);
 }
 
 void AValorCharacter::PossessedBy(AController* NewController)
@@ -387,6 +390,23 @@ void AValorCharacter::KillByEnvironment(AActor* Causer)
 		KillingEvent.bHasOrigin = true;
 	}
 	Die(KillingEvent);
+}
+
+void AValorCharacter::RevealToTeam(EValorTeam Team, float Seconds)
+{
+	const AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	if (HasAuthority() && GameState && Team != EValorTeam::None)
+	{
+		RevealedToTeam = Team;
+		RevealEndServerTime = static_cast<float>(GameState->GetServerWorldTimeSeconds()) + Seconds;
+	}
+}
+
+bool AValorCharacter::IsRevealedTo(EValorTeam Team) const
+{
+	const AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	return GameState && Team != EValorTeam::None && RevealedToTeam == Team && IsAlive()
+		&& static_cast<float>(GameState->GetServerWorldTimeSeconds()) < RevealEndServerTime;
 }
 
 bool AValorCharacter::IsBuyMenuOpen() const

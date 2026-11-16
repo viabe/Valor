@@ -23,7 +23,7 @@
 // 궁극기 포인트, 다음 라운드 충전 유지·시그니처 재충전을 확인하고 상점·스킬 칸 화면을 PNG로 저장한다.
 // 저장 위치: Saved/AgentFlow. 로그는 AGENT로 시작한다.
 // 실행:
-//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?BuyTime=25?RoundTime=3?RoundEndTime=2"
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?BuyTime=40?RoundTime=3?RoundEndTime=2"
 //     -game -windowed -ResX=1280 -ResY=720 -ExecCmds="Automation RunTests Valor.Tools.AgentFlow; Quit"
 // =====================================================================================================
 
@@ -125,12 +125,12 @@ namespace ValorAgentFlowTool
 			case 2:
 				Release(EKeys::Q);
 				Step = 3;
-				Wait(0.4);
+				Wait(3.3);
 				return false;
 
 			case 3:
 				Test->AddInfo(FString::Printf(TEXT("AGENT Q smoke: clouds %d -> %d, Q charges=%d"), SmokeBefore, CountSmoke(), Charges(EValorAbilitySlot::Ability2)));
-				Expect(CountSmoke() == SmokeBefore + 1 && Charges(EValorAbilitySlot::Ability2) == 1, TEXT("Q: 연막 생성, 충전 -1"));
+				Expect(CountSmoke() == SmokeBefore + 1 && Charges(EValorAbilitySlot::Ability2) == 1, TEXT("Q: 연막 통이 떨어진 곳에 연막, 충전 -1"));
 				DashStart = Character->GetActorLocation();
 				Press(EKeys::E);
 				Step = 4;
@@ -158,12 +158,12 @@ namespace ValorAgentFlowTool
 			case 6:
 				Release(EKeys::C);
 				Step = 7;
-				Wait(0.3);
+				Wait(4.4);
 				return false;
 
 			case 7:
 				Test->AddInfo(FString::Printf(TEXT("AGENT C mend: health=%.0f C charges=%d"), Health(), Charges(EValorAbilitySlot::Ability1)));
-				Expect(Health() == 90.0f && Charges(EValorAbilitySlot::Ability1) == 0, TEXT("C: 체력 50 → 90, 충전 -1"));
+				Expect(Health() == 100.0f && Charges(EValorAbilitySlot::Ability1) == 0, TEXT("C: 지속 회복 4초 동안 +60(최대 100), 충전 -1"));
 				AbilitySystem->SetNumericAttributeBase(UValorCombatAttributeSet::GetHealthAttribute(), 30.0f);
 				Press(EKeys::X);
 				Step = 8;

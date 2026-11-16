@@ -196,6 +196,10 @@ private:
 
 	// 요원 스킬 칸(C/Q/E/X): 아래 가운데에 이름·충전·궁극기 포인트.
 	void DrawAbilityBar(float CenterX, float UIScale);
+
+	// 정찰로 드러난 적 위치(벽 너머로 보이는 표시)와 섬광 눈부심(화면 전체 흰색).
+	void DrawRevealedEnemies(float UIScale);
+	void DrawFlashOverlay();
 	bool UsesRounds() const;
 
 	// 그림자 있는 텍스트. AlignX: 0 = 왼쪽 정렬, 0.5 = 가운데, 1 = 오른쪽. 그린 높이를 돌려준다(줄 쌓기용).

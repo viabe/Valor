@@ -446,3 +446,46 @@ void AValorPlayerController::ServerDebugSetUltimatePoints_Implementation(int32 P
 	}
 #endif
 }
+
+void AValorPlayerController::ValorAgent(const FString& AgentName)
+{
+	ServerDebugSetAgent(AgentName);
+}
+
+void AValorPlayerController::ServerDebugSetAgent_Implementation(const FString& AgentName)
+{
+#if !UE_BUILD_SHIPPING
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->SetAgentByName(this, AgentName);
+	}
+#endif
+}
+
+void AValorPlayerController::ClientFlashed_Implementation(float Seconds)
+{
+	// 이미 더 센 눈부심이 남아 있으면 그대로 둔다.
+	const double Now = GetLocalTime();
+	const double CurrentEnd = FlashStartTime + FlashSeconds;
+	if (Now + Seconds > CurrentEnd)
+	{
+		FlashStartTime = Now;
+		FlashSeconds = Seconds;
+	}
+}
+
+float AValorPlayerController::GetFlashAlpha() const
+{
+	if (FlashSeconds <= 0.0f || FlashStartTime < 0.0)
+	{
+		return 0.0f;
+	}
+
+	const float Elapsed = static_cast<float>(GetLocalTime() - FlashStartTime);
+	if (Elapsed >= FlashSeconds)
+	{
+		return 0.0f;
+	}
+	const float HoldSeconds = FlashSeconds * 0.7f;
+	return Elapsed <= HoldSeconds ? 1.0f : 1.0f - ((Elapsed - HoldSeconds) / (FlashSeconds - HoldSeconds));
+}

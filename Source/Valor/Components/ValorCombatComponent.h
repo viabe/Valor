@@ -35,6 +35,9 @@ struct FValorHitScanResult
 	float TravelDistance = 0.0f;
 	bool bBlockingHit = false;
 	bool bPenetratedSurface = false;
+
+	// 탄을 막은 월드 물체(스킬 벽 피해용). 캐릭터 판정과 별개.
+	TWeakObjectPtr<AActor> WorldBlockingActor;
 };
 
 /**

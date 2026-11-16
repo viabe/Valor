@@ -131,6 +131,13 @@ bool FValorAbilityRulesTest::RunTest(const FString& Parameters)
 	// 궁극기 포인트는 필요 포인트에서 멈춘다.
 	TestEqual(TEXT("포인트 +1"), ValorAbilityRules::AddUltimatePoints(3, 1, 6), 4);
 	TestEqual(TEXT("필요 포인트에서 멈춤"), ValorAbilityRules::AddUltimatePoints(6, 1, 6), 6);
+
+	// 섬광: 정면(60도 안) 전부, 옆(110도 안) 일부, 뒤 없음, 가려지거나 반경 밖이면 없음.
+	TestEqual(TEXT("섬광 정면"), ValorAbilityRules::ComputeFlashSeconds(20.0f, true, 500.0f, 2500.0f, 1.75f, 0.6f), 1.75f);
+	TestEqual(TEXT("섬광 옆"), ValorAbilityRules::ComputeFlashSeconds(90.0f, true, 500.0f, 2500.0f, 1.75f, 0.6f), 0.6f);
+	TestEqual(TEXT("섬광 뒤"), ValorAbilityRules::ComputeFlashSeconds(150.0f, true, 500.0f, 2500.0f, 1.75f, 0.6f), 0.0f);
+	TestEqual(TEXT("섬광 가려짐"), ValorAbilityRules::ComputeFlashSeconds(10.0f, false, 500.0f, 2500.0f, 1.75f, 0.6f), 0.0f);
+	TestEqual(TEXT("섬광 반경 밖"), ValorAbilityRules::ComputeFlashSeconds(10.0f, true, 3000.0f, 2500.0f, 1.75f, 0.6f), 0.0f);
 	return true;
 }
 

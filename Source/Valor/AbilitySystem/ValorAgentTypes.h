@@ -86,4 +86,7 @@ namespace ValorAbilityRules
 
 	// 궁극기 포인트 더하기(필요 포인트에서 멈춘다).
 	VALOR_API int32 AddUltimatePoints(int32 Current, int32 Amount, int32 Required);
+
+	// 섬광 눈부심 시간. 가림 없이 보이고 반경 안일 때: 시선과 60도 안 = 전부, 110도 안 = 일부, 그 밖(뒤돌아봄) = 없음.
+	VALOR_API float ComputeFlashSeconds(float AngleDegrees, bool bLineOfSight, float DistanceCm, float RadiusCm, float FullSeconds, float PartialSeconds);
 }

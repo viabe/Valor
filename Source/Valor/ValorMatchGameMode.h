@@ -51,6 +51,9 @@ public:
 	// 개발용: 궁극기 포인트를 정한다.
 	void DebugSetUltimatePoints(AController* Target, int32 Points);
 
+	// 요원 바꾸기(이름으로, AvailableAgents에서 찾음). 충전은 그 요원의 경제 초기화 상태로, 지금 캐릭터의 스킬도 바로 바꾼다.
+	bool SetAgentByName(AController* Target, const FString& AgentName);
+
 	// 개발용: 지금 단계를 바로 끝낸다(단계 타이머가 끝난 것과 같다).
 	void DebugSkipPhase();
 
@@ -113,6 +116,10 @@ protected:
 	// 접속하면 받는 요원(요원 선택 화면은 이후). 지금은 샘플 요원 Drift.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent")
 	TSubclassOf<class UValorAgentDefinition> DefaultAgentClass;
+
+	// 고를 수 있는 요원(요원 선택·개발 명령 ValorAgent).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent")
+	TArray<TSubclassOf<class UValorAgentDefinition>> AvailableAgents;
 
 	// 궁극기 포인트: 처치·사망·설치·해체 각 1점.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent", meta=(ClampMin="0"))

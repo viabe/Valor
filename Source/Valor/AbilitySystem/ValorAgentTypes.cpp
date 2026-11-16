@@ -28,4 +28,17 @@ namespace ValorAbilityRules
 	{
 		return Required > 0 ? FMath::Clamp(Current + Amount, 0, Required) : FMath::Max(0, Current + Amount);
 	}
+
+	float ComputeFlashSeconds(float AngleDegrees, bool bLineOfSight, float DistanceCm, float RadiusCm, float FullSeconds, float PartialSeconds)
+	{
+		if (!bLineOfSight || DistanceCm > RadiusCm)
+		{
+			return 0.0f;
+		}
+		if (AngleDegrees <= 60.0f)
+		{
+			return FullSeconds;
+		}
+		return AngleDegrees <= 110.0f ? PartialSeconds : 0.0f;
+	}
 }
