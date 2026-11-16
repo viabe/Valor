@@ -6,7 +6,22 @@
 #include "Components/ValorCombatComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/PlayerState.h"
 #include "ValorCharacter.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogValorMovement, Log, All);
+
+namespace
+{
+#if !UE_BUILD_SHIPPING
+	// 개발 확인용(Valor.Tools.TagNet): 소유 클라가 피격 감속을 이동 예측에 넣지 않는다 = 감속을 무시하는 조작 흉내. 서버가 잘라 보정하는지 본다.
+	TAutoConsoleVariable<int32> CVarValorIgnoreTagPrediction(
+		TEXT("Valor.Debug.IgnoreTagPrediction"),
+		0,
+		TEXT("개발 확인용: 1이면 소유 클라가 피격 감속을 이동 예측에 넣지 않는다(서버 검증 확인)."),
+		ECVF_Cheat);
+#endif
+}
 
 // =====================================================================================================
 // 순수 계산
@@ -54,6 +69,7 @@ void FValorSavedMove::Clear()
 	bSavedWantsToWalk = false;
 	bSavedWantsToUseSpike = false;
 	SavedEquipSpeedQuantized = 255;
+	SavedTagAckSequence = 0;
 }
 
 uint8 FValorSavedMove::GetCompressedFlags() const
@@ -75,7 +91,9 @@ bool FValorSavedMove::CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* I
 {
 	// 속도가 다른 두 이동을 하나로 합치면 서버가 한 속도로 계산해 클라 결과와 달라진다.
 	const FValorSavedMove* NewValorMove = static_cast<const FValorSavedMove*>(NewMove.Get());
-	if (bSavedWantsToWalk != NewValorMove->bSavedWantsToWalk || bSavedWantsToUseSpike != NewValorMove->bSavedWantsToUseSpike || SavedEquipSpeedQuantized != NewValorMove->SavedEquipSpeedQuantized)
+	// 감속 순번이 바뀐 이동도 합치지 않는다: 서버가 그 이동의 시각으로 감속 시계를 시작해야 클라와 같다.
+	if (bSavedWantsToWalk != NewValorMove->bSavedWantsToWalk || bSavedWantsToUseSpike != NewValorMove->bSavedWantsToUseSpike || SavedEquipSpeedQuantized != NewValorMove->SavedEquipSpeedQuantized
+		|| SavedTagAckSequence != NewValorMove->SavedTagAckSequence)
 	{
 		return false;
 	}
@@ -88,7 +106,8 @@ bool FValorSavedMove::IsImportantMove(const FSavedMovePtr& LastAckedMove) const
 	// 속도 상태가 바뀐 이동은 유실되면 서버가 다른 속도로 계산하므로, 확인될 때까지 다음 패킷에 다시 실어 보낸다(엔진의 "중요한 이동").
 	if (const FValorSavedMove* AckedValorMove = static_cast<const FValorSavedMove*>(LastAckedMove.Get()))
 	{
-		if (bSavedWantsToWalk != AckedValorMove->bSavedWantsToWalk || bSavedWantsToUseSpike != AckedValorMove->bSavedWantsToUseSpike || SavedEquipSpeedQuantized != AckedValorMove->SavedEquipSpeedQuantized)
+		if (bSavedWantsToWalk != AckedValorMove->bSavedWantsToWalk || bSavedWantsToUseSpike != AckedValorMove->bSavedWantsToUseSpike || SavedEquipSpeedQuantized != AckedValorMove->SavedEquipSpeedQuantized
+			|| SavedTagAckSequence != AckedValorMove->SavedTagAckSequence)
 		{
 			return true;
 		}
@@ -106,6 +125,7 @@ void FValorSavedMove::SetMoveFor(ACharacter* C, float InDeltaTime, FVector const
 		bSavedWantsToWalk = MovementComponent->bWantsToWalk;
 		bSavedWantsToUseSpike = MovementComponent->bWantsToUseSpike;
 		SavedEquipSpeedQuantized = MovementComponent->EquipSpeedQuantized;
+		SavedTagAckSequence = MovementComponent->TagMoveClock.Sequence;
 	}
 }
 
@@ -139,6 +159,7 @@ void FValorCharacterNetworkMoveData::ClientFillNetworkMoveData(const FSavedMove_
 	Super::ClientFillNetworkMoveData(ClientMove, MoveType);
 
 	EquipSpeedQuantized = static_cast<const FValorSavedMove&>(ClientMove).SavedEquipSpeedQuantized;
+	TagAckSequence = static_cast<const FValorSavedMove&>(ClientMove).SavedTagAckSequence;
 }
 
 bool FValorCharacterNetworkMoveData::Serialize(UCharacterMovementComponent& CharacterMovement, FArchive& Ar, UPackageMap* PackageMap, ENetworkMoveType MoveType)
@@ -147,6 +168,7 @@ bool FValorCharacterNetworkMoveData::Serialize(UCharacterMovementComponent& Char
 
 	// 대부분의 시간(칼, 또는 같은 총)에는 값이 같지만 이동 하나당 1바이트라 항상 보낸다(조건 비트를 두는 것보다 단순하다).
 	Ar << EquipSpeedQuantized;
+	Ar << TagAckSequence;
 	return !Ar.IsError();
 }
 
@@ -174,6 +196,23 @@ void UValorCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick
 {
 	// 이번 틱의 이동을 만들기 전에 배율을 정한다. 원격 소유 클라의 이동을 받는 서버만은 이동 데이터(MoveAutonomous)에서 정한다.
 	const bool bServerSimulatingRemoteClient = CharacterOwner && CharacterOwner->HasAuthority() && !CharacterOwner->IsLocallyControlled();
+	const bool bPredictingClient = CharacterOwner && !CharacterOwner->HasAuthority() && CharacterOwner->IsLocallyControlled();
+	if (bPredictingClient)
+	{
+		// 새 감속 순번을 처음 보는 이동에서 감속 시계를 시작한다(그 이동에 받은 순번이 실려 서버도 같은 시각에 시작한다).
+		LastPredictedMoveTime = PredictNextMoveTime(DeltaTime);
+		const AValorCharacter* ValorOwner = Cast<AValorCharacter>(CharacterOwner);
+		const FValorTagState* State = ValorOwner ? &ValorOwner->GetTagState() : nullptr;
+		bool bAcknowledge = State && State->Sequence != TagMoveClock.Sequence;
+#if !UE_BUILD_SHIPPING
+		// 감속 무시 조작 흉내: 받지도, 적용하지도 않는다.
+		bAcknowledge &= CVarValorIgnoreTagPrediction.GetValueOnGameThread() <= 0;
+#endif
+		if (bAcknowledge)
+		{
+			TagMoveClock = ValorTagging::AcknowledgeOnMoveClock(TagMoveClock, *State, LastPredictedMoveTime, Tagging);
+		}
+	}
 	if (!bServerSimulatingRemoteClient)
 	{
 		RefreshEquipSpeedFromCombatState();
@@ -245,8 +284,20 @@ void UValorCharacterMovementComponent::MoveAutonomous(float ClientTimeStamp, flo
 		{
 			UpdateServerSpeedHistory();
 			const UWorld* World = GetWorld();
-			const double SecondsSinceChange = World ? World->GetTimeSeconds() - ServerSpeedChangeTime : 0.0;
-			EquipSpeedQuantized = ValorMovement::ResolveClaimedSpeedMultiplier(MoveData->EquipSpeedQuantized, ServerAuthoritativeSpeed, ServerPreviousSpeed, SecondsSinceChange, SpeedChangeGraceSeconds);
+			const double ServerNow = World ? World->GetTimeSeconds() : 0.0;
+			const double SecondsSinceChange = ServerNow - ServerSpeedChangeTime;
+
+			// 허용 최대 = 장비 배율 허용치 × 감속 배율 허용치. 클라 주장은 이 값으로 자른다(더 느린 주장은 그대로).
+			const uint8 AllowedEquip = ValorMovement::ResolveClaimedSpeedMultiplier(255, ServerAuthoritativeSpeed, ServerPreviousSpeed, SecondsSinceChange, SpeedChangeGraceSeconds);
+			const float AllowedTag = ResolveServerTagForMove(ClientTimeStamp, MoveData->TagAckSequence, ServerNow);
+			const uint8 AllowedMax = ValorMovement::QuantizeSpeedMultiplier(ValorMovement::DequantizeSpeedMultiplier(AllowedEquip) * AllowedTag);
+			if (MoveData->EquipSpeedQuantized > AllowedMax)
+			{
+				UE_LOG(LogValorMovement, Verbose, TEXT("[이동 검증] %s 속도 주장 잘림: 주장 %d > 허용 %d(장비 %d × 감속 %.3f), 이동 시각 %.3f, 감속 시계 시작 %.3f(순번 %d, 클라 받음 %d)"),
+					*GetNameSafe(CharacterOwner), MoveData->EquipSpeedQuantized, AllowedMax, AllowedEquip, AllowedTag, ClientTimeStamp, TagMoveClock.StartMoveTime,
+					TagMoveClock.Sequence, MoveData->TagAckSequence);
+			}
+			EquipSpeedQuantized = FMath::Min(MoveData->EquipSpeedQuantized, AllowedMax);
 		}
 		else
 		{
@@ -266,7 +317,88 @@ UValorCombatComponent* UValorCharacterMovementComponent::GetCombatComponent() co
 void UValorCharacterMovementComponent::RefreshEquipSpeedFromCombatState()
 {
 	const UValorCombatComponent* CombatComponent = GetCombatComponent();
-	EquipSpeedQuantized = ValorMovement::QuantizeSpeedMultiplier(CombatComponent ? CombatComponent->GetEquipMoveSpeedMultiplier() : 1.0f);
+	const float EquipMultiplier = CombatComponent ? CombatComponent->GetEquipMoveSpeedMultiplier() : 1.0f;
+	EquipSpeedQuantized = ValorMovement::QuantizeSpeedMultiplier(EquipMultiplier * GetTagSpeedMultiplier());
+}
+
+float UValorCharacterMovementComponent::PredictNextMoveTime(float DeltaTime) const
+{
+	// 엔진(FNetworkPredictionData_Client_Character::UpdateTimeStampAndDeltaTime)과 같은 순서: 일정 시간마다 되돌린 뒤 이번 틱 시간을 더한다.
+	FNetworkPredictionData_Client_Character* ClientData = GetPredictionData_Client_Character();
+	if (!ClientData)
+	{
+		return 0.0f;
+	}
+	float TimeStamp = ClientData->CurrentTimeStamp;
+	if (TimeStamp > MinTimeBetweenTimeStampResets)
+	{
+		TimeStamp -= MinTimeBetweenTimeStampResets;
+	}
+	return TimeStamp + DeltaTime;
+}
+
+float UValorCharacterMovementComponent::ResolveServerTagForMove(float ClientTimeStamp, uint8 ClientAckSequence, double ServerNow)
+{
+	const AValorCharacter* ValorOwner = Cast<AValorCharacter>(CharacterOwner);
+	if (!ValorOwner)
+	{
+		return 1.0f;
+	}
+
+	const FValorTagState& State = ValorOwner->GetTagState();
+	if (State.Sequence != ServerSeenTagSequence)
+	{
+		ServerSeenTagSequence = State.Sequence;
+		ServerTagChangeTime = ServerNow;
+	}
+
+	if (TagMoveClock.Sequence != State.Sequence)
+	{
+		// 클라가 이 이동에서 받았다(정상) 또는 너무 오래 받지 않았다(강제): 이 이동의 시각으로 시계를 시작한다.
+		const bool bClientAcknowledged = ClientAckSequence == State.Sequence;
+		const bool bAckOverdue = ServerNow - ServerTagChangeTime > TagAckMaxDelaySeconds;
+		if (bClientAcknowledged || bAckOverdue)
+		{
+			if (!bClientAcknowledged)
+			{
+				UE_LOG(LogValorMovement, Verbose, TEXT("[이동 검증] %s 감속을 %.2f초 안에 받지 않아 강제로 시작(이동 시각 %.3f)"), *GetNameSafe(CharacterOwner), TagAckMaxDelaySeconds, ClientTimeStamp);
+			}
+			TagMoveClock = ValorTagging::AcknowledgeOnMoveClock(TagMoveClock, State, ClientTimeStamp, Tagging);
+		}
+	}
+
+	return ValorTagging::ComputeAllowedMoveClockMultiplier(TagMoveClock, ClientTimeStamp, TagMoveTimeToleranceSeconds, Tagging);
+}
+
+float UValorCharacterMovementComponent::GetTagSpeedMultiplier() const
+{
+	const AValorCharacter* ValorOwner = Cast<AValorCharacter>(CharacterOwner);
+	const UWorld* World = GetWorld();
+	if (!ValorOwner || !World)
+	{
+		return 1.0f;
+	}
+
+	// 소유 클라(이동을 예측하는 원격 클라): 이동 시계.
+	if (!ValorOwner->HasAuthority())
+	{
+		return ValorTagging::ComputeMoveClockMultiplier(TagMoveClock, LastPredictedMoveTime, Tagging);
+	}
+
+	// 서버가 직접 움직이는 캐릭터(리슨 호스트 자신, 봇): 서버 시간.
+	return ValorTagging::ComputeSpeedMultiplier(ValorOwner->GetTagState(), World->GetTimeSeconds(), Tagging);
+}
+
+void UValorCharacterMovementComponent::OnClientCorrectionReceived(FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity,
+	UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode, FVector ServerGravityDirection)
+{
+	++ClientCorrectionCount;
+	const UWorld* World = GetWorld();
+	const AGameStateBase* GameState = World ? World->GetGameState() : nullptr;
+	UE_LOG(LogValorMovement, Verbose, TEXT("[이동 보정] %s 보정 받음: 이동 시각 %.3f, 서버 시간 추정 %.3f, 감속 배율 %.3f, 속도 배율 %d, 위치 차이 %.1fcm"),
+		*GetNameSafe(CharacterOwner), TimeStamp, GameState ? GameState->GetServerWorldTimeSeconds() : -1.0, GetTagSpeedMultiplier(), EquipSpeedQuantized,
+		CharacterOwner ? FVector::Dist(CharacterOwner->GetActorLocation(), NewLocation) : -1.0f);
+	Super::OnClientCorrectionReceived(ClientData, TimeStamp, NewLocation, NewVelocity, NewBase, NewBaseBoneName, bHasBase, bBaseRelativePosition, ServerMovementMode, ServerGravityDirection);
 }
 
 void UValorCharacterMovementComponent::UpdateServerSpeedHistory()

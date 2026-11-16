@@ -293,6 +293,39 @@ void AValorPlayerController::ServerDebugAddBot_Implementation(uint8 Team)
 #endif
 }
 
+void AValorPlayerController::ValorTagMe(const FString& IntervalSeconds, const FString& StrengthPercent)
+{
+	const bool bOff = IntervalSeconds.Equals(TEXT("off"), ESearchCase::IgnoreCase) || (!IntervalSeconds.IsEmpty() && FCString::Atof(*IntervalSeconds) <= 0.0f);
+	const float Interval = bOff ? 0.0f : (IntervalSeconds.IsEmpty() ? 1.5f : FCString::Atof(*IntervalSeconds));
+	const float Strength = StrengthPercent.IsEmpty() ? 0.725f : FCString::Atof(*StrengthPercent) / 100.0f;
+	bDebugTagLoopRequested = !bOff;
+	ServerDebugTagLoop(Interval, Strength);
+}
+
+void AValorPlayerController::ServerDebugTagLoop_Implementation(float IntervalSeconds, float Strength)
+{
+#if !UE_BUILD_SHIPPING
+	GetWorldTimerManager().ClearTimer(DebugTagTimerHandle);
+	if (IntervalSeconds <= 0.0f)
+	{
+		return;
+	}
+
+	// 실제 총에 맞을 때와 같은 서버 경로(AValorCharacter::ApplyBulletTag)로 건다. 피해는 주지 않는다.
+	DebugTagStrength = FMath::Clamp(Strength, 0.0f, 1.0f);
+	DebugApplyTagToSelf();
+	GetWorldTimerManager().SetTimer(DebugTagTimerHandle, this, &AValorPlayerController::DebugApplyTagToSelf, FMath::Max(0.3f, IntervalSeconds), true);
+#endif
+}
+
+void AValorPlayerController::DebugApplyTagToSelf()
+{
+	if (AValorCharacter* PossessedCharacter = Cast<AValorCharacter>(GetPawn()))
+	{
+		PossessedCharacter->ApplyBulletTag(DebugTagStrength);
+	}
+}
+
 void AValorPlayerController::ServerDebugKillMe_Implementation()
 {
 #if !UE_BUILD_SHIPPING

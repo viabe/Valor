@@ -12,6 +12,7 @@
 #include "Components/ValorViewmodelComponent.h"
 #include "Components/ValorCharacterMovementComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
+#include "Components/ValorTaggingTypes.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -657,6 +658,8 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 				Pending.Damage += Damage;
 				Pending.HitZone = ValorDamage::MoreSevereZone(Pending.HitZone, HitResult.HitZone);
 				Pending.bPenetrated |= HitResult.bPenetratedSurface;
+				Pending.NearestHitDistance = FMath::Min(Pending.NearestHitDistance, HitResult.TravelDistance + DamageDistanceOffset);
+				Pending.bAnyDirectHit |= !HitResult.bPenetratedSurface;
 			}
 
 			OutImpact.ImpactPoint = HitResult.ImpactPoint;
@@ -666,9 +669,16 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 			return OutImpact.bBlockingHit;
 		});
 
+	// 맞은 대상마다 피해, 그다음 피격 감속(살아남은 대상만). 감속 세기는 펠릿·거리·벽 관통으로 고른다(ValorTagging::SelectStrength).
 	for (const TPair<AValorCharacter*, FValorPendingTargetDamage>& TargetDamage : DamageByTarget)
 	{
-		ApplyDamageToTarget(TargetDamage.Key, TargetDamage.Value, TraceStart, EquippedWeapon);
+		AValorCharacter* Target = TargetDamage.Key;
+		if (ApplyDamageToTarget(Target, TargetDamage.Value, TraceStart, EquippedWeapon) && Target && Target->GetValorMovement())
+		{
+			const float TagStrength = ValorTagging::SelectStrength(PelletCount > 1, TargetDamage.Value.NearestHitDistance, !TargetDamage.Value.bAnyDirectHit,
+				Target->GetValorMovement()->GetTaggingConfig());
+			Target->ApplyBulletTag(TagStrength);
+		}
 	}
 
 	// 연출: 로컬 사수가 곧 서버인 리슨 호스트는 여기서 바로 재생하고, 나머지 클라는 멀티캐스트로 받는다.
@@ -686,18 +696,18 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 	}
 }
 
-void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin, AActor* DamageCauser)
+bool UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin, AActor* DamageCauser)
 {
 	// 아군 피해는 판정 단계에서 이미 빠지지만, 피해를 실제로 주는 마지막 관문에서도 막는다.
 	if (!Target || !Target->IsAlive() || !AbilitySystemComponent || !DamageCauser || PendingDamage.Damage <= 0.0f || ValorTeams::AreAllies(OwnerCharacter, Target))
 	{
-		return;
+		return false;
 	}
 
 	UAbilitySystemComponent* TargetASC = Target->GetAbilitySystemComponent();
 	if (!TargetASC)
 	{
-		return;
+		return false;
 	}
 
 	// 피해는 사수의 ASC가 만든 GE 스펙으로 보낸다 → 대상 AttributeSet이 "누가(사수), 무엇으로(무기), 어디서(발사 위치)"를 안다.
@@ -710,7 +720,7 @@ void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const F
 	const FGameplayEffectSpecHandle SpecHandle = AbilitySystemComponent->MakeOutgoingSpec(UValorDamageGameplayEffect::StaticClass(), 1.0f, Context);
 	if (!SpecHandle.IsValid())
 	{
-		return;
+		return false;
 	}
 
 	SpecHandle.Data->SetSetByCallerMagnitude(ValorGameplayTags::SetByCaller_Damage, PendingDamage.Damage);
@@ -727,6 +737,7 @@ void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const F
 	}
 
 	AbilitySystemComponent->ApplyGameplayEffectSpecToTarget(*SpecHandle.Data.Get(), TargetASC);
+	return true;
 }
 
 bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)

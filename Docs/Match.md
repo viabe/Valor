@@ -24,6 +24,7 @@
 | `ValorSkipPhase` | 지금 단계를 바로 끝낸다. 교전을 건너뛰면 시간 종료(수비 승) |
 | `ValorAddBot A` / `ValorAddBot B` | 그 팀에 봇(가만히 서 있는 허수아비)을 넣는다. 생략하면 인원이 적은 팀. 혼자서 아군·적이 필요할 때 |
 | `ValorKillMe` | 내 캐릭터를 즉사시킨다(관전 확인용) |
+| `ValorTagMe [간격초\|off] [세기%]` | 서버가 일정 간격으로 내 캐릭터에 피격 감속을 건다(피해 없음, 기본 1.5초마다 72.5%). 크로스헤어 아래 `SLOWED`·`CORRECTIONS` 표시(Weapons.md 피격 감속) |
 | `Valor.HUD.TextScale 1.6` | HUD 글자·패널 배율(0이면 기본 1.4) |
 
 | 확인할 것 | 방법 |

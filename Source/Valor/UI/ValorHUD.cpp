@@ -1,5 +1,7 @@
 #include "UI/ValorHUD.h"
 
+#include "Components/ValorCharacterMovementComponent.h"
+
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
 #include "Camera/PlayerCameraManager.h"
 #include "CanvasItem.h"
@@ -38,6 +40,12 @@ namespace
 		TEXT("Valor.HUD.TextScale"),
 		0.0f,
 		TEXT("HUD 글자·패널 배율(1080p 기준 대비). 0이면 HUD 기본값(TextScale)을 쓴다."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarValorTagDebug(
+		TEXT("Valor.HUD.TagDebug"),
+		1,
+		TEXT("개발 빌드: 1이면 피격 감속 중에 크로스헤어 아래에 지금 속도 비율(SLOWED)과 위치 보정 횟수를 보여 준다. 0이면 끈다."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<int32> CVarValorHitMarker(
@@ -149,6 +157,7 @@ void AValorHUD::DrawHUD()
 		if (Character)
 		{
 			DrawVitals(*Character, CombatComponent, CenterX, TextUIScale);
+			DrawTagDebug(*Character, CenterX, CenterY, TextUIScale);
 		}
 	}
 
@@ -333,6 +342,34 @@ float AValorHUD::DrawShadowedText(const FString& Text, const FLinearColor& Color
 	DrawText(Text, FLinearColor(0.0f, 0.0f, 0.0f, Color.A * 0.75f), DrawX + ShadowOffset, DrawY + ShadowOffset, Font, Scale);
 	DrawText(Text, Color, DrawX, DrawY, Font, Scale);
 	return TextHeight;
+}
+
+void AValorHUD::DrawTagDebug(const AValorCharacter& Character, float CenterX, float CenterY, float UIScale)
+{
+#if !UE_BUILD_SHIPPING
+	const UValorCharacterMovementComponent* Movement = Character.GetValorMovement();
+	if (!Movement || CVarValorTagDebug.GetValueOnGameThread() <= 0)
+	{
+		return;
+	}
+
+	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+	const bool bLoopOn = ValorController && ValorController->IsDebugTagLoopRequested();
+	const float Multiplier = Movement->GetTagSpeedMultiplier();
+	if (Multiplier >= 0.999f && !bLoopOn)
+	{
+		return;
+	}
+
+	// 위치 보정 횟수는 원격 클라에서만 의미가 있다(서버·리슨 호스트는 보정을 받지 않는다).
+	FString Line = Multiplier < 0.999f ? FString::Printf(TEXT("SLOWED  %d%%"), FMath::RoundToInt(Multiplier * 100.0f)) : FString(TEXT("TAG TEST ON"));
+	if (!Character.HasAuthority())
+	{
+		Line += FString::Printf(TEXT("   |   CORRECTIONS %d"), Movement->GetClientCorrectionCount());
+	}
+	const FLinearColor Color = Multiplier < 0.999f ? FLinearColor(1.0f, 0.55f, 0.15f) : FLinearColor(0.75f, 0.75f, 0.75f);
+	DrawShadowedText(Line, Color, CenterX, CenterY + (70.0f * UIScale), GEngine->GetSmallFont(), UIScale, 0.5f);
+#endif
 }
 
 void AValorHUD::DrawHitMarker(float CenterX, float CenterY, float UIScale)

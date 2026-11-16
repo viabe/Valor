@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/CharacterMovementReplication.h"
+#include "Components/ValorTaggingTypes.h"
 #include "ValorCharacterMovementComponent.generated.h"
 
 class UValorCombatComponent;
@@ -44,6 +45,8 @@ public:
 	bool bSavedWantsToWalk = false;
 	bool bSavedWantsToUseSpike = false;
 	uint8 SavedEquipSpeedQuantized = 255;
+	// 이 이동까지 받은 피격 감속 순번(서버가 같은 이동 시각으로 감속 시계를 시작한다).
+	uint8 SavedTagAckSequence = 0;
 };
 
 class FValorNetworkPredictionData_Client : public FNetworkPredictionData_Client_Character
@@ -65,6 +68,7 @@ struct FValorCharacterNetworkMoveData : public FCharacterNetworkMoveData
 	virtual bool Serialize(UCharacterMovementComponent& CharacterMovement, FArchive& Ar, UPackageMap* PackageMap, ENetworkMoveType MoveType) override;
 
 	uint8 EquipSpeedQuantized = 255;
+	uint8 TagAckSequence = 0;
 };
 
 struct FValorCharacterNetworkMoveDataContainer : public FCharacterNetworkMoveDataContainer
@@ -88,11 +92,18 @@ struct FValorCharacterNetworkMoveDataContainer : public FCharacterNetworkMoveDat
  *     저장된 값을 그대로 쓴다.
  *   - 서버: 클라가 주장한 배율을 서버 권위 상태로 검증(ValorMovement::ResolveClaimedSpeedMultiplier)한 뒤 그 값으로 시뮬레이션한다.
  *   - 리슨 호스트 자신과 다른 클라에서의 원격 캐릭터: 전투 컴포넌트 상태로 직접 계산한다.
+ * 피격 감속(태깅, ValorTaggingTypes.h): 이동에 실어 보내는 배율 = 장비 배율 × 감속 배율이다.
+ *   - 소유 클라는 새 감속 순번을 본 첫 이동에서 감속 시계를 시작하고, 이동마다 받은 순번(1바이트)을 같이 보낸다.
+ *   - 서버는 그 순번이 처음 실린 이동의 클라 이동 시각으로 같은 시계를 시작해 허용 배율을 정한다(클라와 같은 식, 같은 입력).
+ *   - 클라가 TagAckMaxDelaySeconds 안에 받지 않으면 서버가 강제로 시작한다(감속 무시 조작은 늦출 뿐 피하지 못한다).
+ *
  * 트레이드오프:
  *   - 클라가 숫자(배율)를 보내지만 서버가 아는 최대치를 넘지 못하므로 "더 빨리 달리기" 조작은 막힌다. 대신 서버 상태가 바뀐 직후
  *     GraceSeconds 동안은 바뀌기 전 속도를 허용한다(교체 직후 최대 0.3초, 그 사이에도 장착 시간 때문에 새 총은 못 쏜다).
  *   - 핑이 GraceSeconds보다 큰 클라는 서버가 먼저 바꾼 상태(총 줍기로 더 느린 총을 든 경우 등)에서 한 번 보정될 수 있다.
  *   - 앉기 이동 속도 비율은 공개 수치가 없어 추정치다.
+ *   - 감속을 무시하는 조작은 감속 시작을 최대 TagAckMaxDelaySeconds만큼 늦출 수 있다. 대신 정상 클라는 핑과 무관하게 보정이 없다.
+ *   - 이동 시각은 엔진이 240초마다 0 근처로 되돌린다. 그 순간 걸려 있던 감속은 클라·서버 모두 같은 이동에서 끊긴다(드물고 서로 어긋나지 않음).
  */
 UCLASS()
 class VALOR_API UValorCharacterMovementComponent : public UCharacterMovementComponent
@@ -117,8 +128,20 @@ public:
 	void SetWantsToUseSpike(bool bNewWantsToUseSpike) { bWantsToUseSpike = bNewWantsToUseSpike; }
 	bool WantsToUseSpike() const { return bWantsToUseSpike; }
 
-	// 이번 이동에 쓰는 장비 속도 배율(양자화된 값).
+	// 이번 이동에 쓰는 속도 배율(장비 × 피격 감속, 양자화된 값).
 	uint8 GetEquipSpeedQuantized() const { return EquipSpeedQuantized; }
+
+	// 피격 감속 수치(서버가 맞은 대상의 감속 세기를 고를 때도 읽는다).
+	const FValorTaggingConfig& GetTaggingConfig() const { return Tagging; }
+
+	// 이 머신이 보는 지금 감속 배율(1 = 감속 없음). 소유 클라는 이동 시계, 서버가 직접 움직이는 캐릭터는 서버 시간 기준.
+	float GetTagSpeedMultiplier() const;
+
+	// 개발 확인용: 이 클라가 서버에게 받은 위치 보정 횟수(감속 예측이 서버와 맞는지 보는 지표).
+	int32 GetClientCorrectionCount() const { return ClientCorrectionCount; }
+
+	virtual void OnClientCorrectionReceived(class FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity,
+		UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode, FVector ServerGravityDirection) override;
 
 	// 정확도 계산(걷기/달리기 판정)과 HUD가 읽는 기준값.
 	float GetBaseRunSpeed() const { return BaseRunSpeed; }
@@ -142,6 +165,18 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Movement|Validation", meta=(ClampMin="0.0"))
 	float SpeedChangeGraceSeconds = 0.3f;
 
+	// 피격 감속 수치(공개 값 + 추정, ValorTaggingTypes.h).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Movement|Tagging")
+	FValorTaggingConfig Tagging;
+
+	// 서버: 맞힌 뒤 클라가 이 시간(초, 서버 시간) 안에 감속을 받았다고 하지 않으면 강제로 시작한다. 정상 클라의 최대 지연보다 넉넉히.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Movement|Tagging", meta=(ClampMin="0.0"))
+	float TagAckMaxDelaySeconds = 0.5f;
+
+	// 서버 검증 여유(초): 클라는 다음 이동 시각을 미리 어림해 배율을 정하므로 아주 작은 차이를 허용한다.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Valor|Movement|Tagging", meta=(ClampMin="0.0"))
+	float TagMoveTimeToleranceSeconds = 0.02f;
+
 private:
 	friend class FValorSavedMove;
 
@@ -153,11 +188,27 @@ private:
 	// 서버: 서버 권위 배율의 변화 이력(직전 값과 바뀐 시각)을 갱신한다.
 	void UpdateServerSpeedHistory();
 
+	// 소유 클라: 다음 이동의 이동 시각(엔진이 이동을 만들 때 쓸 값)을 어림한다.
+	float PredictNextMoveTime(float DeltaTime) const;
+
+	// 서버: 원격 클라 이동 하나를 처리하기 전에 감속 시계를 갱신하고(받음 또는 강제 시작) 이 이동의 허용 감속 배율을 돌려준다.
+	float ResolveServerTagForMove(float ClientTimeStamp, uint8 ClientAckSequence, double ServerNow);
+
 	bool bWantsToWalk = false;
 	bool bWantsToUseSpike = false;
 
-	// 이번 이동의 장비 속도 배율(양자화). 255 = 배율 1(칼).
+	// 이번 이동의 속도 배율(장비 × 피격 감속, 양자화). 255 = 배율 1(칼, 감속 없음).
 	uint8 EquipSpeedQuantized = 255;
+
+	int32 ClientCorrectionCount = 0;
+
+	// 감속 시계(소유 클라: 내 예측용, 서버: 그 클라 이동 처리용). 이동 시각 기준이다.
+	FValorTagMoveClock TagMoveClock;
+	float LastPredictedMoveTime = 0.0f;
+
+	// 서버: 마지막으로 본 서버 감속 순번과 바뀐 서버 시각(강제 시작 판단).
+	uint8 ServerSeenTagSequence = 0;
+	double ServerTagChangeTime = -1000.0;
 
 	// 서버 검증 이력.
 	uint8 ServerAuthoritativeSpeed = 255;

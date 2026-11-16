@@ -6,6 +6,7 @@
 
 struct FValorShooterStance;
 struct FValorSprayEvaluation;
+class AValorCharacter;
 
 /**
  * 발로란트식 크로스헤어 HUD(로컬 플레이어 전용).
@@ -176,6 +177,9 @@ private:
 
 	// 전투 피드백. 데이터는 로컬 컨트롤러(명중/피격/사망), GameState(킬피드), PlayerState(전적), 캐릭터(체력/실드)에서 읽기만 한다.
 	void DrawHitMarker(float CenterX, float CenterY, float UIScale);
+
+	// 개발 표시: 피격 감속 중이면 크로스헤어 아래에 지금 속도 비율, ValorTagMe를 켰으면 위치 보정 횟수(클라 예측 확인용)도.
+	void DrawTagDebug(const AValorCharacter& Character, float CenterX, float CenterY, float UIScale);
 	void DrawDamageIndicators(float CenterX, float CenterY, float UIScale);
 	void DrawVitals(const class AValorCharacter& Character, const class UValorCombatComponent* CombatComponent, float CenterX, float UIScale);
 

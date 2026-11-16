@@ -23,6 +23,10 @@ struct FValorPendingTargetDamage
 	float Damage = 0.0f;
 	EValorHitZone HitZone = EValorHitZone::None;
 	bool bPenetrated = false;
+
+	// 피격 감속 세기 고르기용: 가장 가까운 명중 거리, 벽을 안 뚫고 바로 맞은 탄이 있었나.
+	float NearestHitDistance = TNumericLimits<float>::Max();
+	bool bAnyDirectHit = false;
 };
 
 // 서버 히트스캔 결과(서버 내부 전용, 복제하지 않음).
@@ -510,7 +514,8 @@ private:
 
 	// 서버 전용: 한 대상에게 이번 발의 피해를 GAS 피해 GE로 적용한다(사수/무기/발사 위치/부위를 스펙에 싣는다).
 	// DamageCauser = 총 또는 칼 액터(킬피드 무기 이름).
-	void ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin, AActor* DamageCauser);
+	// 피해를 실제로 보냈으면 true.
+	bool ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin, AActor* DamageCauser);
 
 	// 한 줄기 히트스캔: 벽은 월드 트레이스(캐릭터 무시), 캐릭터는 판정 상자(UValorLagCompensationComponent)로 본다.
 	// 서버(bRewindToShotTime = true)는 발사 시각으로 되감은 자세, 사수 클라의 예측(false)은 지금 보이는 자세로 판정한다.

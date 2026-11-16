@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
 #include "Components/ValorCharacterStateComponent.h"
+#include "Components/ValorTaggingTypes.h"
 #include "GameFramework/Character.h"
 #include "Interfaces/ValorWeaponOwnerInterface.h"
 #include "Weapons/ValorInventoryTypes.h"
@@ -194,6 +195,10 @@ public:
 
 	UValorCharacterMovementComponent* GetValorMovement() const;
 
+	// 피격 감속(서버 전용): 총에 맞은 직후 부른다. 감속 상태를 정해 본인에게 복제한다(이동 컴포넌트가 이동 예측에 쓴다).
+	void ApplyBulletTag(float Strength);
+	const FValorTagState& GetTagState() const { return TagState; }
+
 	// 마지막 착지 시각(로컬 월드 시간). 착지 직후 탄퍼짐 페널티(발로란트 Jump land inaccuracy)에 쓴다.
 	double GetLastLandedWorldTime() const { return LastLandedWorldTime; }
 
@@ -273,6 +278,10 @@ protected:
 
 	UPROPERTY(ReplicatedUsing=OnRep_IsDead, VisibleInstanceOnly, BlueprintReadOnly, Category = "Valor|Death")
 	bool bIsDead = false;
+
+	// 피격 감속 상태. 이동 예측은 소유 클라만 하므로 본인에게만 보낸다(다른 클라는 복제된 위치·속도를 그대로 보여 준다).
+	UPROPERTY(Replicated)
+	FValorTagState TagState;
 
 	UFUNCTION()
 	void OnRep_IsDead();

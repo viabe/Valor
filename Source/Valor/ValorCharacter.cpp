@@ -133,6 +133,7 @@ void AValorCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AValorCharacter, bIsDead);
 	DOREPLIFETIME(AValorCharacter, RevealedToTeam);
 	DOREPLIFETIME(AValorCharacter, RevealEndServerTime);
+	DOREPLIFETIME_CONDITION(AValorCharacter, TagState, COND_OwnerOnly);
 }
 
 void AValorCharacter::PossessedBy(AController* NewController)
@@ -940,4 +941,18 @@ void AValorCharacter::SetCrouchIntent(bool bNewWantsToCrouch)
 	{
 		CharacterStateComponent->ServerEvaluateMovementState();
 	}
+}
+
+void AValorCharacter::ApplyBulletTag(float Strength)
+{
+	const UValorCharacterMovementComponent* MovementComponent = GetValorMovement();
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !IsAlive() || !MovementComponent || !World || Strength <= 0.0f)
+	{
+		return;
+	}
+
+	TagState = ValorTagging::AddHit(TagState, World->GetTimeSeconds(), Strength, MovementComponent->GetTaggingConfig());
+	// 소유 클라가 빨리 알수록 늦게 느려지는 시간이 짧다(서버 검증 허용 시간 안에 들어온다).
+	ForceNetUpdate();
 }

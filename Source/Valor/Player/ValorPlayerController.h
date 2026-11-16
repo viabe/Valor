@@ -170,6 +170,14 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerDebugKillMe();
 
+	// ValorTagMe [간격초|off] [세기%]: 서버가 일정 간격으로 내 캐릭터에 피격 감속을 건다(피해 없음). 혼자 창 하나로 감속을 확인하는 용도.
+	// 생략하면 1.5초마다 72.5%, "ValorTagMe off" 또는 0이면 끈다. 예) ValorTagMe 1 25 = 1초마다 벽 관통 세기.
+	UFUNCTION(Exec)
+	void ValorTagMe(const FString& IntervalSeconds, const FString& StrengthPercent);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDebugTagLoop(float IntervalSeconds, float Strength);
+
 	// === 관전(로컬 화면 전용) ===
 	// 경기 모드에서 죽으면 DeathCamSeconds 동안 시체 시점을 보여 준 뒤 살아 있는 아군 뒤 3인칭 카메라로 넘어간다.
 	// 왼쪽 클릭 = 다음 아군, 오른쪽 클릭 = 이전 아군. 보던 아군이 죽으면 다음 아군으로, 아군이 없으면 시체 시점으로 돌아간다.
@@ -185,6 +193,9 @@ public:
 	const TArray<FDamageIndicator>& GetDamageIndicators() const { return DamageIndicators; }
 	const FValorDeathInfo& GetLastDeathInfo() const { return LastDeathInfo; }
 	bool HasDeathInfo() const { return bHasDeathInfo; }
+
+	// ValorTagMe를 켠 상태인지(HUD 개발 표시용, 이 화면에서 켠 경우).
+	bool IsDebugTagLoopRequested() const { return bDebugTagLoopRequested; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -253,4 +264,10 @@ private:
 
 	double GetLocalTime() const;
 	void ClearDeathFeedback();
+
+	// ValorTagMe(서버): 반복 타이머와 세기. 클라: 켰는지(HUD 표시).
+	FTimerHandle DebugTagTimerHandle;
+	float DebugTagStrength = 0.725f;
+	bool bDebugTagLoopRequested = false;
+	void DebugApplyTagToSelf();
 };
