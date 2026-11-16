@@ -200,6 +200,9 @@ private:
 	// 정찰로 드러난 적 위치(벽 너머로 보이는 표시)와 섬광 눈부심(화면 전체 흰색).
 	void DrawRevealedEnemies(float UIScale);
 	void DrawFlashOverlay();
+
+	// 요원 선택 창: 요원 카드(이름·스킬 네 칸), 팀원 선택 상황, LOCK IN 버튼.
+	void DrawAgentSelect(float CenterX, float UIScale);
 	bool UsesRounds() const;
 
 	// 그림자 있는 텍스트. AlignX: 0 = 왼쪽 정렬, 0.5 = 가운데, 1 = 오른쪽. 그린 높이를 돌려준다(줄 쌓기용).

@@ -23,7 +23,7 @@
 // 궁극기 포인트, 다음 라운드 충전 유지·시그니처 재충전을 확인하고 상점·스킬 칸 화면을 PNG로 저장한다.
 // 저장 위치: Saved/AgentFlow. 로그는 AGENT로 시작한다.
 // 실행:
-//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?BuyTime=40?RoundTime=3?RoundEndTime=2"
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?SelectTime=1?BuyTime=40?RoundTime=3?RoundEndTime=2"
 //     -game -windowed -ResX=1280 -ResY=720 -ExecCmds="Automation RunTests Valor.Tools.AgentFlow; Quit"
 // =====================================================================================================
 

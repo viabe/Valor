@@ -21,7 +21,7 @@
 // 실제 왼쪽·오른쪽 클릭으로 아군을 바꾸는지, 보던 아군이 죽으면 다음 아군으로, 아군이 다 죽으면 시체 시점으로 돌아가는지,
 // 다음 라운드에 내 캐릭터 시점으로 돌아오는지 본다. 저장 위치: Saved/SpectateFlow. 로그는 SPECTATE로 시작한다.
 // 실행:
-//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?BuyTime=4?RoundTime=60?RoundEndTime=3"
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?SelectTime=1?BuyTime=4?RoundTime=60?RoundEndTime=3"
 //     -game -windowed -ResX=1280 -ResY=720 -ExecCmds="Automation RunTests Valor.Tools.SpectateFlow; Quit"
 // =====================================================================================================
 

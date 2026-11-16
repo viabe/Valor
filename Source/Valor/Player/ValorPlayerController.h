@@ -108,6 +108,16 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerSellShield(int32 ShieldIndex);
 
+	// 요원 선택 단계: 고르기·확정(규칙 검사는 서버 게임 모드).
+	UFUNCTION(Server, Reliable)
+	void ServerSelectAgent(TSubclassOf<UValorAgentDefinition> AgentClass);
+
+	UFUNCTION(Server, Reliable)
+	void ServerLockAgent();
+
+	// 요원 선택 창이 열려 있나(선택 단계 동안 자동으로 열리고 커서가 보인다).
+	bool IsAgentSelectOpen() const { return bAgentSelectOpen; }
+
 	// 스킬 충전 구매·되팔기(칸 번호 = EValorAbilitySlot).
 	UFUNCTION(Server, Reliable)
 	void ServerBuyAbility(uint8 Slot);
@@ -218,6 +228,10 @@ private:
 	bool bHasDeathInfo = false;
 
 	bool bBuyMenuOpen = false;
+	bool bAgentSelectOpen = false;
+
+	// 캔버스 HUD 클릭 영역용 커서 모드(구매 메뉴·요원 선택 창이 같이 쓴다).
+	void ApplyCursorMode(bool bCursor);
 
 	double FlashStartTime = -1.0;
 	float FlashSeconds = 0.0f;

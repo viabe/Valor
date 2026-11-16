@@ -24,7 +24,7 @@
 //   정찰 다트 → 적 봇이 우리 팀에 표시됨, 섬광탄 → 정면으로 본 나는 눈부심, 도약 → 위로 뜸, 방벽 → 벽 생성·총에 맞으면 체력 감소,
 //   다음 라운드 → 스킬 물체 모두 정리. 저장 위치: Saved/AbilityBlocks. 로그는 BLOCKS로 시작한다.
 // 실행:
-//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?BuyTime=40?RoundTime=3?RoundEndTime=2"
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=12?SelectTime=1?BuyTime=40?RoundTime=3?RoundEndTime=2"
 //     -game -windowed -ResX=1280 -ResY=720 -ExecCmds="Automation RunTests Valor.Tools.AbilityBlocks; Quit"
 // =====================================================================================================
 

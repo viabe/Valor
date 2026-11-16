@@ -29,6 +29,18 @@ namespace ValorAbilityRules
 		return Required > 0 ? FMath::Clamp(Current + Amount, 0, Required) : FMath::Max(0, Current + Amount);
 	}
 
+	const UClass* PickFallbackAgent(const TArray<const UClass*>& Roster, const TArray<const UClass*>& TakenByTeam)
+	{
+		for (const UClass* Agent : Roster)
+		{
+			if (Agent && !TakenByTeam.Contains(Agent))
+			{
+				return Agent;
+			}
+		}
+		return Roster.Num() > 0 ? Roster[0] : nullptr;
+	}
+
 	float ComputeFlashSeconds(float AngleDegrees, bool bLineOfSight, float DistanceCm, float RadiusCm, float FullSeconds, float PartialSeconds)
 	{
 		if (!bLineOfSight || DistanceCm > RadiusCm)

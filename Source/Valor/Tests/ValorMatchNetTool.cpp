@@ -6,7 +6,9 @@
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/AutomationTest.h"
+#include "Player/ValorPlayerController.h"
 #include "Player/ValorPlayerState.h"
+#include "AbilitySystem/ValorAgentTypes.h"
 #include "ValorCharacter.h"
 #include "ValorGameState.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -22,8 +24,10 @@
 // 1라운드: 두 사람이 서로 다른 팀·서로 다른 스폰에 서는지, 교전 중 한 팀이 전멸하면 라운드가 끝나는지(전멸 승), 처치 200 + 승리 3000 /
 // 패배 1900 보상이 맞는지 본다. 호스트가 구매 단계에 둘에게 밴달을 주고, 교전이 시작되면 클라를 호스트 정면 3m에 세운다.
 // 클라는 호스트 머리를 쏴 처치한다.
+// 반응 시간: 클라가 요원 선택 단계에 요원을 고르고 확정하며, 구매 단계에 실드를 사고 되판다. 서버 RPC를 보낸 뒤 결과(PlayerState 복제)가
+// 클라에 보이기까지의 시간을 잰다(같은 PC라 거의 네트워크 틱 몇 번이어야 한다. 엔진 기본 PlayerState 주기 1초면 평균 0.5초).
 // 실행(호스트 먼저, 약 25초 뒤 클라):
-//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?listen?game=Match?PreMatchTime=45?BuyTime=6?RoundTime=40?RoundEndTime=4"
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?listen?game=Match?PreMatchTime=45?SelectTime=8?BuyTime=6?RoundTime=40?RoundEndTime=4"
 //     -game -ExecCmds="Automation RunTests Valor.Tools.MatchNet.Host; Quit"
 //   UnrealEditor.exe Valor.uproject 127.0.0.1 -game -ExecCmds="Automation RunTests Valor.Tools.MatchNet.Client; Quit"
 // =====================================================================================================
@@ -91,6 +95,11 @@ namespace ValorMatchNetTool
 				return !bHost || !OtherState || Now - ReportTime > 20.0;
 			}
 
+			if (!bHost)
+			{
+				MeasureAgentSelect(Now, *GameState, *MyState, Controller);
+			}
+
 			if (!OtherState || !Me || GameState->GetRoundNumber() < 1)
 			{
 				return false;
@@ -114,6 +123,16 @@ namespace ValorMatchNetTool
 						Other->GetCombatComponent()->GiveWeapon(Vandal, true, true);
 					}
 				}
+				BuyMeasureStartTime = Now + 1.0;
+			}
+
+			if (!bHost && Phase == EValorRoundPhase::BuyPhase && GameState->GetRoundNumber() == 1)
+			{
+				MeasureShopLatency(Now, *GameState, *MyState, Controller);
+			}
+			if (!bHost && Phase == EValorRoundPhase::Combat && GameState->GetRoundNumber() == 1 && !bReportedLatency)
+			{
+				ReportLatency();
 			}
 
 			if (Phase == EValorRoundPhase::Combat && Other && GameState->GetRoundNumber() == 1)
@@ -246,6 +265,92 @@ namespace ValorMatchNetTool
 		}
 
 	private:
+		// 클라: 요원 선택 단계에 남은 요원 하나를 고르고(ServerSelectAgent) 확정한다(ServerLockAgent). 각각 결과가 복제돼 보이기까지 잰다.
+		void MeasureAgentSelect(double Now, const AValorGameState& GameState, const AValorPlayerState& MyState, APlayerController* Controller)
+		{
+			AValorPlayerController* ValorController = Cast<AValorPlayerController>(Controller);
+			if (!ValorController || GameState.GetRoundPhase() != EValorRoundPhase::AgentSelect || GameState.GetAgentRoster().Num() < 2)
+			{
+				return;
+			}
+			if (AgentSelectSeenTime < 0.0)
+			{
+				AgentSelectSeenTime = Now;
+			}
+			if (SelectSentTime < 0.0 && Now - AgentSelectSeenTime >= 0.5)
+			{
+				TargetAgent = GameState.GetAgentRoster()[1];
+				SelectSentTime = Now;
+				ValorController->ServerSelectAgent(TargetAgent);
+			}
+			if (SelectSentTime >= 0.0 && SelectLatency < 0.0 && MyState.GetAgentClass() == TargetAgent)
+			{
+				SelectLatency = Now - SelectSentTime;
+				LockSentTime = Now;
+				ValorController->ServerLockAgent();
+			}
+			if (LockSentTime >= 0.0 && LockLatency < 0.0 && MyState.IsAgentLocked())
+			{
+				LockLatency = Now - LockSentTime;
+			}
+		}
+
+		// 클라: 구매 단계에 경량 실드를 사고 되팔기를 번갈아 한다(마지막은 되팔기라 크레딧은 처음과 같다). 크레딧이 바뀌어 보이기까지 잰다.
+		void MeasureShopLatency(double Now, const AValorGameState& GameState, const AValorPlayerState& MyState, APlayerController* Controller)
+		{
+			AValorPlayerController* ValorController = Cast<AValorPlayerController>(Controller);
+			if (!ValorController || BuyMeasureStartTime < 0.0 || Now < BuyMeasureStartTime)
+			{
+				return;
+			}
+			if (ShopSentTime >= 0.0)
+			{
+				if (MyState.GetCredits() != CreditsBeforeShop)
+				{
+					ShopLatencies.Add(Now - ShopSentTime);
+					bShieldBought = !bShieldBought;
+					ShopSentTime = -1.0;
+					NextShopTime = Now + 0.15;
+				}
+				return;
+			}
+			// 6번(산 뒤 되팔기 세 번). 되팔기는 구매 단계에만 되므로, 실드를 산 상태가 아니면 남은 시간이 넉넉할 때만 새로 산다.
+			const bool bCanStartCycle = bShieldBought || GameState.GetPhaseTimeRemaining() > 2.0f;
+			if (ShopLatencies.Num() < 6 && Now >= NextShopTime && bCanStartCycle)
+			{
+				CreditsBeforeShop = MyState.GetCredits();
+				ShopSentTime = Now;
+				if (bShieldBought)
+				{
+					ValorController->ServerSellShield(0);
+				}
+				else
+				{
+					ValorController->ServerBuyShield(0);
+				}
+			}
+		}
+
+		void ReportLatency()
+		{
+			bReportedLatency = true;
+			double Sum = 0.0;
+			double Max = 0.0;
+			for (const double Latency : ShopLatencies)
+			{
+				Sum += Latency;
+				Max = FMath::Max(Max, Latency);
+			}
+			const double Average = ShopLatencies.Num() > 0 ? Sum / ShopLatencies.Num() : -1.0;
+			Test->AddInfo(FString::Printf(TEXT("MATCHNET Client latency: select=%.3fs lock=%.3fs shop n=%d avg=%.3fs max=%.3fs shieldBought=%d"),
+				SelectLatency, LockLatency, ShopLatencies.Num(), Average, Max, bShieldBought ? 1 : 0));
+			// 같은 PC의 리슨 서버라 왕복 + 네트워크 틱 몇 번이면 된다. 0.25초를 넘으면 사람이 "한 박자 늦다"고 느낀다.
+			Expect(SelectLatency >= 0.0 && SelectLatency < 0.25, TEXT("요원 선택이 0.25초 안에 보임"));
+			Expect(LockLatency >= 0.0 && LockLatency < 0.25, TEXT("요원 확정이 0.25초 안에 보임"));
+			Expect(ShopLatencies.Num() >= 2 && Max < 0.25, TEXT("구매·되팔기 크레딧이 0.25초 안에 보임"));
+			Expect(!bShieldBought, TEXT("측정 뒤 실드를 되팔아 크레딧이 처음과 같음"));
+		}
+
 		void Expect(bool bCondition, const TCHAR* What)
 		{
 			if (!bCondition)
@@ -271,6 +376,21 @@ namespace ValorMatchNetTool
 		double PlantPressTime = 0.0;
 		double DefuseCheckTime = -1.0;
 		int32 CreditsBeforePlant = 0;
+
+		// 반응 시간 측정(클라).
+		double AgentSelectSeenTime = -1.0;
+		double SelectSentTime = -1.0;
+		double LockSentTime = -1.0;
+		double SelectLatency = -1.0;
+		double LockLatency = -1.0;
+		TSubclassOf<UValorAgentDefinition> TargetAgent;
+		double BuyMeasureStartTime = -1.0;
+		double ShopSentTime = -1.0;
+		double NextShopTime = 0.0;
+		int32 CreditsBeforeShop = 0;
+		bool bShieldBought = false;
+		bool bReportedLatency = false;
+		TArray<double> ShopLatencies;
 	};
 }
 

@@ -8,7 +8,7 @@
 |---|---|
 | PIE | 맵 World Settings → GameMode Override → `ValorMatchGameMode`(C++ 클래스). 캐릭터 BP(`BP_ValorCharacterBase`)는 생성자가 자동으로 고른다 |
 | 단독/패키징 실행 | 맵 URL에 `?game=Match`(별칭, `DefaultEngine.ini`). 데스매치는 `?game=DM` |
-| 빠른 확인 | URL 옵션으로 단계 시간 변경: `?PreMatchTime=3?BuyTime=6?RoundTime=20?RoundEndTime=3?MatchEndTime=5` |
+| 빠른 확인 | URL 옵션으로 단계 시간 변경: `?PreMatchTime=3?SelectTime=5?BuyTime=6?RoundTime=20?RoundEndTime=3?MatchEndTime=5?SpikeTime=10` |
 
 지금 테스트 맵(`ThridPersonExampleMap`)은 World Settings가 `BP_ValorGameMode`(데스매치)라 PIE 기본은 데스매치다.
 
@@ -38,7 +38,7 @@
 
 ## 2. 라운드 흐름
 
-접속 대기(첫 접속 뒤 3초) → [구매 30초 → 교전 100초 → 라운드 종료 7초] 반복 → 경기 종료 15초 → 새 경기.
+접속 대기(첫 접속 뒤 3초) → 요원 선택(30초) → [구매 30초 → 교전 100초 → 라운드 종료 7초] 반복 → 경기 종료 15초 → 새 경기(요원 선택부터).
 
 | 단계 | 이동 | 사격 | 상점 |
 |---|---|---|---|
@@ -90,6 +90,7 @@
 
 - 구매 단계 이동·사격 잠금은 기본으로 끈다(`bFreezePlayersDuringBuyPhase`, `bBlockFireDuringBuyPhase`, 발로란트처럼 움직이고 쏠 수 있음). 켜면 이동은 `UValorCharacterMovementComponent::GetMaxSpeed`가 복제된 단계를 보고 0을 돌려주고(예측과 맞음), 사격은 클라 발사(`TryFireLocalShot`)와 서버 검증(`ValidateShotRequest`)이 같은 `IsWeaponFireAllowed`를 본다.
 - 스폰 장벽(`AValorSpawnBarrier`)은 상태를 복제하지 않고 각 머신이 복제된 단계를 보고 켜고 끈다. 맵에 놓아야 동작한다(9절).
+- 복제 주기: 엔진 기본은 PlayerState 초당 1번, GameState 초당 10번이다. 그대로 두면 클라 화면에서 구매·요원 선택 결과가 최대 1초 늦게 보인다. 그래서 서버가 값을 바꾸는 setter마다 `ForceNetUpdate`를 불러 다음 네트워크 틱에 바로 보낸다(PlayerState 기본 주기는 10번). 새 복제 값을 추가하면 setter에서 같이 불러야 한다.
 
 ## 6. 확인 도구
 
@@ -97,7 +98,7 @@
 |---|---|
 | `Valor.Match.Rules.*` | 보상, 승리 조건(연장 2점 차), 공수, 경제 초기화 라운드, 팀 배정, 스폰 나누기 |
 | `Valor.Tools.MatchFlow` | 혼자 짧은 경기: 실제 B 키로 메뉴 열기·닫기, 실제 마우스 클릭으로 실드 구매(총은 안 쏨), 구매 단계 이동·사격 가능, 실드·총 구매·되팔기·바꿔 사기, 시간 종료 수비 승, 패배 보상, 장비 가져가기, 화면 캡처(`Saved/MatchFlow`) |
-| `Valor.Tools.MatchNet.Host/Client` | 리슨 서버 + 클라. 1라운드: 서로 다른 팀·스폰, 전멸 승, 처치·승패 보상. 2라운드: 호스트가 실제 4 키로 설치(+300), 클라가 실제 4 키로 해체(이동 고정 예측), 해체 승 |
+| `Valor.Tools.MatchNet.Host/Client` | 리슨 서버 + 클라. 반응 시간: 클라 요원 선택·확정, 실드 구매·되팔기가 0.25초 안에 보이는지(`SelectTime=8`로 실행). 1라운드: 서로 다른 팀·스폰, 전멸 승, 처치·승패 보상. 2라운드: 호스트가 실제 4 키로 설치(+300), 클라가 실제 4 키로 해체(이동 고정 예측), 해체 승 |
 | `Valor.Tools.SpikeFlow` | 혼자: 스파이크 지급, 지점 A에서 실제 4 키로 설치(이동 고정), 설치 보너스, 폭발 → 공격 승, 반경 안 사망, 화면 캡처(`Saved/SpikeFlow`) |
 | `Valor.Match.Rules.Spike` | 전멸 판정(설치 전·후), 설치 진행, 해체 절반 저장 |
 

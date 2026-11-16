@@ -62,7 +62,7 @@ AValorMatchGameMode::AValorMatchGameMode()
 	SpawnShield = 0.0f;
 
 	DefaultAgentClass = UValorAgent_Drift::StaticClass();
-	AvailableAgents = {UValorAgent_Drift::StaticClass(), UValorAgent_Flare::StaticClass()};
+	AvailableAgents = {UValorAgent_Drift::StaticClass(), UValorAgent_Flare::StaticClass(), UValorAgent_Cinder::StaticClass(), UValorAgent_Rook::StaticClass()};
 }
 
 void AValorMatchGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
@@ -83,6 +83,7 @@ void AValorMatchGameMode::InitGame(const FString& MapName, const FString& Option
 	ReadSeconds(TEXT("RoundEndTime"), RoundEndSeconds);
 	ReadSeconds(TEXT("MatchEndTime"), MatchEndSeconds);
 	ReadSeconds(TEXT("SpikeTime"), SpikeDetonationSeconds);
+	ReadSeconds(TEXT("SelectTime"), AgentSelectSeconds);
 }
 
 void AValorMatchGameMode::InitGameState()
@@ -95,6 +96,7 @@ void AValorMatchGameMode::InitGameState()
 		ValorGameState->SetFreezeDuringBuyPhase(bFreezePlayersDuringBuyPhase);
 		ValorGameState->SetBlockFireDuringBuyPhase(bBlockFireDuringBuyPhase);
 		ValorGameState->SetRoundPhase(EValorRoundPhase::WaitingToStart, 0.0f);
+		ValorGameState->SetAgentRoster(AvailableAgents);
 	}
 }
 
@@ -172,7 +174,7 @@ void AValorMatchGameMode::HandleStartingNewPlayer_Implementation(APlayerControll
 	}
 
 	// 대기·구매 단계면 바로 팀 스폰에 세우고, 교전 중이면 다음 라운드까지 기다린다(관전).
-	if (CurrentPhase == EValorRoundPhase::WaitingToStart || CurrentPhase == EValorRoundPhase::BuyPhase)
+	if (CurrentPhase == EValorRoundPhase::WaitingToStart || CurrentPhase == EValorRoundPhase::AgentSelect || CurrentPhase == EValorRoundPhase::BuyPhase)
 	{
 		RebuildSpawnBases();
 		const AValorGameState* ValorGameState = GetValorGameState();
@@ -276,6 +278,21 @@ void AValorMatchGameMode::HandlePhaseTimerExpired()
 	switch (CurrentPhase)
 	{
 	case EValorRoundPhase::WaitingToStart:
+		if (bUseAgentSelect)
+		{
+			BeginAgentSelect();
+		}
+		else
+		{
+			BeginRound();
+		}
+		break;
+
+	case EValorRoundPhase::AgentSelect:
+		FinishAgentSelect();
+		BeginRound();
+		break;
+
 	case EValorRoundPhase::RoundEnd:
 		BeginRound();
 		break;
@@ -483,6 +500,12 @@ void AValorMatchGameMode::ResetMatch()
 		Controller->GetPlayerState<AValorPlayerState>()->SetUltimatePoints(0);
 	}
 
+	// 새 경기는 요원 선택부터 다시 한다.
+	if (bUseAgentSelect)
+	{
+		BeginAgentSelect();
+		return;
+	}
 	BeginRound();
 }
 
@@ -1194,6 +1217,127 @@ bool AValorMatchGameMode::SetAgentByName(AController* Target, const FString& Age
 			}
 		}
 		GrantAgentAbilities(*Character);
+	}
+	return true;
+}
+
+// ======================================================================================
+// 요원 선택
+// ======================================================================================
+
+TArray<const UClass*> AValorMatchGameMode::GetAgentsLockedByTeam(EValorTeam Team, const AValorPlayerState* Except) const
+{
+	TArray<const UClass*> Taken;
+	TArray<AController*> Controllers;
+	GetMatchPlayers(Controllers);
+	for (const AController* Controller : Controllers)
+	{
+		const AValorPlayerState* PlayerState = Controller->GetPlayerState<AValorPlayerState>();
+		if (PlayerState && PlayerState != Except && PlayerState->GetTeam() == Team && PlayerState->IsAgentLocked() && PlayerState->GetAgentClass())
+		{
+			Taken.Add(PlayerState->GetAgentClass());
+		}
+	}
+	return Taken;
+}
+
+void AValorMatchGameMode::LockFallbackAgent(AValorPlayerState& PlayerState) const
+{
+	// 고른 요원이 있고 같은 팀이 확정하지 않았으면 그대로, 아니면 남은 요원 중 첫 번째.
+	const TArray<const UClass*> Taken = GetAgentsLockedByTeam(PlayerState.GetTeam(), &PlayerState);
+	const UClass* Current = PlayerState.GetAgentClass();
+	if (!Current || Taken.Contains(Current))
+	{
+		TArray<const UClass*> Roster;
+		for (const TSubclassOf<UValorAgentDefinition>& AgentClass : AvailableAgents)
+		{
+			Roster.Add(AgentClass.Get());
+		}
+		const UClass* Fallback = ValorAbilityRules::PickFallbackAgent(Roster, Taken);
+		PlayerState.SetAgentClass(const_cast<UClass*>(Fallback));
+	}
+	PlayerState.SetAgentLocked(true);
+}
+
+void AValorMatchGameMode::BeginAgentSelect()
+{
+	TArray<AController*> Controllers;
+	GetMatchPlayers(Controllers);
+	// 사람은 아무것도 고르지 않은 상태로 시작한다(기본 요원이 미리 골라져 보이지 않게). 시간이 끝나면 남은 요원이 자동 배정된다.
+	for (AController* Controller : Controllers)
+	{
+		AValorPlayerState* PlayerState = Controller->GetPlayerState<AValorPlayerState>();
+		PlayerState->SetAgentLocked(false);
+		if (!PlayerState->IsABot())
+		{
+			PlayerState->SetAgentClass(nullptr);
+		}
+	}
+
+	// 봇은 남은 요원을 바로 확정한다(사람이 고를 요원을 먼저 가져가지 않도록, 사람이 확정하지 않은 요원 중에서).
+	for (AController* Controller : Controllers)
+	{
+		AValorPlayerState* PlayerState = Controller->GetPlayerState<AValorPlayerState>();
+		if (PlayerState->IsABot())
+		{
+			PlayerState->SetAgentClass(nullptr);
+			LockFallbackAgent(*PlayerState);
+		}
+	}
+
+	UE_LOG(LogValorMatch, Log, TEXT("요원 선택 시작(%.0f초)"), AgentSelectSeconds);
+	SetPhase(EValorRoundPhase::AgentSelect, AgentSelectSeconds);
+}
+
+void AValorMatchGameMode::FinishAgentSelect()
+{
+	TArray<AController*> Controllers;
+	GetMatchPlayers(Controllers);
+	for (AController* Controller : Controllers)
+	{
+		AValorPlayerState* PlayerState = Controller->GetPlayerState<AValorPlayerState>();
+		if (!PlayerState->IsAgentLocked())
+		{
+			LockFallbackAgent(*PlayerState);
+		}
+		UE_LOG(LogValorMatch, Log, TEXT("  %s → %s"), *PlayerState->GetPlayerName(), PlayerState->GetAgent() ? *PlayerState->GetAgent()->DisplayName.ToString() : TEXT("?"));
+	}
+}
+
+bool AValorMatchGameMode::TrySelectAgent(AController* Player, TSubclassOf<UValorAgentDefinition> AgentClass)
+{
+	AValorPlayerState* PlayerState = Player ? Player->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (CurrentPhase != EValorRoundPhase::AgentSelect || !PlayerState || PlayerState->IsAgentLocked()
+		|| !AgentClass || !AvailableAgents.Contains(AgentClass)
+		|| GetAgentsLockedByTeam(PlayerState->GetTeam(), PlayerState).Contains(AgentClass.Get()))
+	{
+		return false;
+	}
+
+	PlayerState->SetAgentClass(AgentClass);
+	RefreshAbilityChargesForRound(*PlayerState, true);
+	return true;
+}
+
+bool AValorMatchGameMode::TryLockAgent(AController* Player)
+{
+	AValorPlayerState* PlayerState = Player ? Player->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (CurrentPhase != EValorRoundPhase::AgentSelect || !PlayerState || PlayerState->IsAgentLocked() || !PlayerState->GetAgentClass()
+		|| GetAgentsLockedByTeam(PlayerState->GetTeam(), PlayerState).Contains(PlayerState->GetAgentClass().Get()))
+	{
+		return false;
+	}
+
+	PlayerState->SetAgentLocked(true);
+	UE_LOG(LogValorMatch, Log, TEXT("%s 확정: %s"), *PlayerState->GetPlayerName(), *PlayerState->GetAgent()->DisplayName.ToString());
+
+	// 모두 확정했으면 1초 뒤 바로 시작한다(같은 프레임에 단계를 넘기지 않는다).
+	TArray<AController*> Controllers;
+	GetMatchPlayers(Controllers);
+	const bool bAllLocked = !Controllers.ContainsByPredicate([](const AController* Controller) { return !Controller->GetPlayerState<AValorPlayerState>()->IsAgentLocked(); });
+	if (bAllLocked)
+	{
+		SetPhase(EValorRoundPhase::AgentSelect, 1.0f);
 	}
 	return true;
 }

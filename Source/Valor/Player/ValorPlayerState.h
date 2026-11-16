@@ -52,6 +52,7 @@ struct FValorCarriedLoadout
  *
  * 네트워크: 전적·팀·크레딧은 모두에게 복제한다(점수판, 팀 색, 아군 구매 화면). 값은 GameMode(서버)만 바꾼다.
  *   이번 라운드 구매 목록은 본인에게만 복제한다(상점에서 "되팔기"로 표시).
+ *   서버 setter는 값을 바꾸면 ForceNetUpdate로 바로 보낸다(엔진 기본 주기 1초를 기다리면 구매·요원 선택이 한 박자 늦게 보인다).
  * 트레이드오프: 크레딧이 적에게도 복제된다(발로란트는 적 경제를 직접 보여 주지 않는다). 팀별 복제 필터는 매치 규칙이 굳은 뒤에 넣는다.
  */
 UCLASS()
@@ -60,6 +61,8 @@ class VALOR_API AValorPlayerState : public APlayerState
 	GENERATED_BODY()
 
 public:
+	AValorPlayerState();
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// 서버 전용.
@@ -119,7 +122,14 @@ public:
 	void SetAbilityCharges(EValorAbilitySlot Slot, int32 Charges);
 	void SetUltimatePoints(int32 Points);
 
+	// 요원 선택 단계에서 확정했나(확정한 요원은 같은 팀이 고를 수 없다).
+	bool IsAgentLocked() const { return bAgentLocked; }
+	void SetAgentLocked(bool bLocked);
+
 protected:
+	// 서버에서 복제 값이 바뀌었을 때 부른다: 1초 주기를 기다리지 않고 다음 네트워크 틱에 보낸다.
+	void NotifyReplicatedStateChanged();
+
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Score")
 	int32 Kills = 0;
 
@@ -147,4 +157,7 @@ protected:
 
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Agent")
 	int32 UltimatePoints = 0;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Agent")
+	bool bAgentLocked = false;
 };

@@ -132,6 +132,14 @@ bool FValorAbilityRulesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("포인트 +1"), ValorAbilityRules::AddUltimatePoints(3, 1, 6), 4);
 	TestEqual(TEXT("필요 포인트에서 멈춤"), ValorAbilityRules::AddUltimatePoints(6, 1, 6), 6);
 
+	// 요원 자동 배정: 같은 팀이 확정하지 않은 첫 요원, 다 쓰였으면 첫 요원.
+	const UClass* AgentA = UValorAgentDefinition::StaticClass();
+	const UClass* AgentB = UObject::StaticClass();
+	TestEqual(TEXT("아무도 안 씀 → 첫 요원"), ValorAbilityRules::PickFallbackAgent({AgentA, AgentB}, {}), AgentA);
+	TestEqual(TEXT("첫 요원이 쓰임 → 다음"), ValorAbilityRules::PickFallbackAgent({AgentA, AgentB}, {AgentA}), AgentB);
+	TestEqual(TEXT("다 쓰임 → 첫 요원(중복 허용)"), ValorAbilityRules::PickFallbackAgent({AgentA, AgentB}, {AgentA, AgentB}), AgentA);
+	TestNull(TEXT("목록이 비면 없음"), ValorAbilityRules::PickFallbackAgent({}, {}));
+
 	// 섬광: 정면(60도 안) 전부, 옆(110도 안) 일부, 뒤 없음, 가려지거나 반경 밖이면 없음.
 	TestEqual(TEXT("섬광 정면"), ValorAbilityRules::ComputeFlashSeconds(20.0f, true, 500.0f, 2500.0f, 1.75f, 0.6f), 1.75f);
 	TestEqual(TEXT("섬광 옆"), ValorAbilityRules::ComputeFlashSeconds(90.0f, true, 500.0f, 2500.0f, 1.75f, 0.6f), 0.6f);

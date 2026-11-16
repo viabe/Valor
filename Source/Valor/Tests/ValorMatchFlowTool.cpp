@@ -29,7 +29,7 @@
 // 라운드 보상(연패 1900), 다음 라운드로 가져가는 장비를 확인하고 HUD(구매 메뉴, 라운드 결과)를 PNG로 저장한다.
 // 저장 위치: Saved/MatchFlow/*.png. 로그는 MATCH로 시작한다.
 // 실행:
-//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=15?BuyTime=6?RoundTime=4?RoundEndTime=3"
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=15?SelectTime=1?BuyTime=6?RoundTime=4?RoundEndTime=3"
 //     -game -windowed -ResX=1280 -ResY=720 -ExecCmds="Automation RunTests Valor.Tools.MatchFlow; Quit"
 // =====================================================================================================
 

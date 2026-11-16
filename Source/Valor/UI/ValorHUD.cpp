@@ -168,6 +168,7 @@ void AValorHUD::DrawHUD()
 			DrawAbilityBar(CenterX, TextUIScale);
 		}
 		DrawBuyMenu(CenterX, TextUIScale);
+		DrawAgentSelect(CenterX, TextUIScale);
 	}
 
 	// 섬광 눈부심은 모든 HUD 위에 덮는다(맨 마지막).
@@ -809,6 +810,7 @@ void AValorHUD::DrawMatchStatus(float CenterX, float UIScale)
 	switch (ValorGameState->GetRoundPhase())
 	{
 	case EValorRoundPhase::WaitingToStart: PhaseText = TEXT("WAITING FOR PLAYERS"); break;
+	case EValorRoundPhase::AgentSelect: PhaseText = TEXT("AGENT SELECT"); break;
 	case EValorRoundPhase::BuyPhase: PhaseText = FString::Printf(TEXT("ROUND %d  |  BUY PHASE (B)"), ValorGameState->GetRoundNumber()); break;
 	case EValorRoundPhase::Combat:
 	case EValorRoundPhase::RoundEnd: PhaseText = FString::Printf(TEXT("ROUND %d"), ValorGameState->GetRoundNumber()); break;
@@ -1075,7 +1077,28 @@ void AValorHUD::NotifyHitBoxClick(FName BoxName)
 	AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
 	const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
 	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
-	if (!ValorController || !ValorController->IsBuyMenuOpen() || !ValorGameState || !ValorPlayerState)
+	if (!ValorController || !ValorGameState || !ValorPlayerState)
+	{
+		return;
+	}
+
+	// 요원 선택 창.
+	if (ValorController->IsAgentSelectOpen())
+	{
+		const FString SelectName = BoxName.ToString();
+		int32 AgentIndex = INDEX_NONE;
+		if (SelectName == TEXT("LockIn"))
+		{
+			ValorController->ServerLockAgent();
+		}
+		else if (SelectName.StartsWith(TEXT("SelectAgent_")) && LexTryParseString(AgentIndex, *SelectName.RightChop(12)) && ValorGameState->GetAgentRoster().IsValidIndex(AgentIndex))
+		{
+			ValorController->ServerSelectAgent(ValorGameState->GetAgentRoster()[AgentIndex]);
+		}
+		return;
+	}
+
+	if (!ValorController->IsBuyMenuOpen())
 	{
 		return;
 	}
@@ -1298,5 +1321,115 @@ void AValorHUD::DrawFlashOverlay()
 	if (Alpha > 0.0f)
 	{
 		DrawRect2D(FLinearColor::White, 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY, Alpha);
+	}
+}
+
+void AValorHUD::DrawAgentSelect(float CenterX, float UIScale)
+{
+	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+	const AValorGameState* ValorGameState = GetWorld()->GetGameState<AValorGameState>();
+	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	if (!ValorController || !ValorController->IsAgentSelectOpen() || !ValorGameState || !ValorPlayerState || !GEngine)
+	{
+		return;
+	}
+
+	DrawRect2D(FLinearColor::Black, 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY, 0.75f);
+	UFont* MediumFont = GEngine->GetMediumFont();
+	UFont* SmallFont = GEngine->GetSmallFont();
+	const EValorTeam LocalTeam = ValorPlayerState->GetTeam();
+
+	// 같은 팀이 확정한 요원(누가 확정했는지).
+	TMap<const UClass*, FString> LockedByTeam;
+	for (const APlayerState* Other : ValorGameState->PlayerArray)
+	{
+		const AValorPlayerState* OtherState = Cast<AValorPlayerState>(Other);
+		if (OtherState && OtherState != ValorPlayerState && OtherState->GetTeam() == LocalTeam && OtherState->IsAgentLocked() && OtherState->GetAgentClass())
+		{
+			LockedByTeam.Add(OtherState->GetAgentClass(), OtherState->GetPlayerName());
+		}
+	}
+
+	DrawShadowedText(FString::Printf(TEXT("SELECT YOUR AGENT  |  %s"), *ValorMatchHUD::FormatTime(ValorGameState->GetPhaseTimeRemaining())),
+		FLinearColor(0.95f, 0.9f, 0.6f, 1.0f), CenterX, 110.0f * UIScale, MediumFont, 1.2f * UIScale, 0.5f);
+
+	// 요원 카드: 이름 + 스킬 네 칸. 클릭 = 고르기.
+	const TArray<TSubclassOf<UValorAgentDefinition>>& Roster = ValorGameState->GetAgentRoster();
+	const float CardWidth = 220.0f * UIScale;
+	const float CardHeight = 170.0f * UIScale;
+	const float Gap = 14.0f * UIScale;
+	const float FitScale = FMath::Min(1.0f, (Canvas->ClipX * 0.96f) / FMath::Max(1.0f, (Roster.Num() * (CardWidth + Gap)) - Gap));
+	const float W = CardWidth * FitScale;
+	const float H = CardHeight * FitScale;
+	const float G = Gap * FitScale;
+	const float StartX = CenterX - ((Roster.Num() * (W + G)) - G) * 0.5f;
+	const float CardY = 170.0f * UIScale;
+	static const TCHAR* const SlotKeys[] = {TEXT("C"), TEXT("Q"), TEXT("E"), TEXT("X")};
+
+	for (int32 Index = 0; Index < Roster.Num(); ++Index)
+	{
+		const UValorAgentDefinition* Agent = Roster[Index] ? Roster[Index]->GetDefaultObject<UValorAgentDefinition>() : nullptr;
+		if (!Agent)
+		{
+			continue;
+		}
+
+		const float X = StartX + (Index * (W + G));
+		const bool bMine = ValorPlayerState->GetAgentClass() == Roster[Index];
+		const FString* TakenBy = LockedByTeam.Find(Roster[Index].Get());
+		FLinearColor Background = bMine ? FLinearColor(0.1f, 0.45f, 0.4f, 1.0f) : FLinearColor(0.18f, 0.18f, 0.2f, 1.0f);
+		DrawRect2D(Background, X, CardY, W, H, TakenBy ? 0.4f : 0.95f);
+
+		float Y = CardY + (8.0f * UIScale);
+		Y += DrawShadowedText(Agent->DisplayName.ToString().ToUpper(), TakenBy ? FLinearColor(0.5f, 0.5f, 0.5f, 1.0f) : FLinearColor::White, X + (10.0f * UIScale), Y, MediumFont, 1.1f * FitScale * UIScale, 0.0f);
+		Y += 6.0f * UIScale;
+		for (int32 SlotIndex = 0; SlotIndex < ValorAbilityRules::SlotCount; ++SlotIndex)
+		{
+			const FValorAbilitySlotConfig& Config = Agent->GetSlot(static_cast<EValorAbilitySlot>(SlotIndex));
+			Y += DrawShadowedText(FString::Printf(TEXT("%s  %s"), SlotKeys[SlotIndex], *Config.DisplayName.ToString()), FLinearColor(0.85f, 0.85f, 0.85f, 1.0f), X + (10.0f * UIScale), Y, SmallFont, FitScale * UIScale, 0.0f);
+		}
+
+		FString Status;
+		if (TakenBy)
+		{
+			Status = FString::Printf(TEXT("TAKEN: %s"), **TakenBy);
+		}
+		else if (bMine)
+		{
+			Status = ValorPlayerState->IsAgentLocked() ? TEXT("LOCKED") : TEXT("SELECTED");
+		}
+		DrawShadowedText(Status, FLinearColor(0.95f, 0.9f, 0.6f, 1.0f), X + W - (8.0f * UIScale), CardY + H - (22.0f * UIScale), SmallFont, FitScale * UIScale, 1.0f);
+
+		if (!TakenBy && !ValorPlayerState->IsAgentLocked())
+		{
+			AddHitBox(FVector2D(X, CardY), FVector2D(W, H), FName(*FString::Printf(TEXT("SelectAgent_%d"), Index)), true);
+		}
+	}
+
+	// LOCK IN 버튼(고른 요원이 있고 아직 확정하지 않았을 때).
+	const float ButtonWidth = 220.0f * UIScale;
+	const float ButtonHeight = 50.0f * UIScale;
+	const float ButtonX = CenterX - (ButtonWidth * 0.5f);
+	const float ButtonY = CardY + H + (24.0f * UIScale);
+	const bool bCanLock = ValorPlayerState->GetAgentClass() && !ValorPlayerState->IsAgentLocked() && !LockedByTeam.Contains(ValorPlayerState->GetAgentClass().Get());
+	DrawRect2D(bCanLock ? FLinearColor(0.85f, 0.3f, 0.3f, 1.0f) : FLinearColor(0.3f, 0.3f, 0.3f, 1.0f), ButtonX, ButtonY, ButtonWidth, ButtonHeight, 0.95f);
+	DrawShadowedText(ValorPlayerState->IsAgentLocked() ? TEXT("LOCKED IN") : TEXT("LOCK IN"), FLinearColor::White, CenterX, ButtonY + (12.0f * UIScale), MediumFont, UIScale, 0.5f);
+	if (bCanLock)
+	{
+		AddHitBox(FVector2D(ButtonX, ButtonY), FVector2D(ButtonWidth, ButtonHeight), TEXT("LockIn"), true);
+	}
+
+	// 팀원 선택 상황(아래).
+	float TeamY = ButtonY + ButtonHeight + (24.0f * UIScale);
+	for (const APlayerState* Other : ValorGameState->PlayerArray)
+	{
+		const AValorPlayerState* OtherState = Cast<AValorPlayerState>(Other);
+		if (!OtherState || OtherState->GetTeam() != LocalTeam)
+		{
+			continue;
+		}
+		const FString AgentName = OtherState->GetAgent() ? OtherState->GetAgent()->DisplayName.ToString() : TEXT("-");
+		TeamY += DrawShadowedText(FString::Printf(TEXT("%s  —  %s%s"), *OtherState->GetPlayerName(), *AgentName, OtherState->IsAgentLocked() ? TEXT("  (LOCKED)") : TEXT("")),
+			OtherState == ValorPlayerState ? FLinearColor(0.35f, 0.95f, 0.8f, 1.0f) : FLinearColor(0.85f, 0.85f, 0.85f, 1.0f), CenterX, TeamY, SmallFont, UIScale, 0.5f);
 	}
 }

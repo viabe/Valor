@@ -1,7 +1,9 @@
 #include "World/ValorAbilityEffects.h"
 
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
+#include "AbilitySystem/Effects/ValorDamageGameplayEffect.h"
 #include "AbilitySystem/ValorAgentTypes.h"
+#include "AbilitySystem/ValorGameplayTags.h"
 #include "AbilitySystemComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -223,4 +225,123 @@ AValorProjectile_Recon::AValorProjectile_Recon()
 	GravityScale = 0.3f;
 	bStickOnHit = true;
 	bDetonateOnStop = true;
+}
+
+// ======================================================================================
+// 화염 지대
+// ======================================================================================
+
+AValorDamageZone::AValorDamageZone()
+{
+	PrimaryActorTick.bCanEverTick = true;
+	LifetimeSeconds = 4.0f;
+
+	Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
+	RootComponent = Mesh;
+	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Mesh->CastShadow = false;
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (CylinderMesh.Succeeded())
+	{
+		Mesh->SetStaticMesh(CylinderMesh.Object);
+	}
+}
+
+void AValorDamageZone::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	// 기본 원기둥은 지름 100cm·높이 100cm. 바닥에 얇게 깐 원판으로 보이게 한다.
+	Mesh->SetWorldScale3D(FVector(RadiusCm / 50.0f, RadiusCm / 50.0f, 0.1f));
+}
+
+void AValorDamageZone::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	Accumulated += DeltaSeconds;
+	while (Accumulated >= TickSeconds)
+	{
+		Accumulated -= TickSeconds;
+		TArray<AValorCharacter*> Victims;
+		for (TActorIterator<AValorCharacter> It(GetWorld()); It; ++It)
+		{
+			const FVector Offset = It->GetActorLocation() - GetActorLocation();
+			if (It->IsAlive() && Offset.Size2D() <= RadiusCm && FMath::Abs(Offset.Z) <= 200.0f)
+			{
+				Victims.Add(*It);
+			}
+		}
+		for (AValorCharacter* Victim : Victims)
+		{
+			ApplyZoneDamage(*Victim, DamagePerSecond * TickSeconds);
+		}
+	}
+}
+
+void AValorDamageZone::ApplyZoneDamage(AValorCharacter& Victim, float Damage)
+{
+	// 만든 사람의 ASC로 보낸다(처치 기록·킬피드가 만든 사람에게 간다). 만든 사람이 없으면 맞는 쪽 ASC로.
+	AValorCharacter* InstigatorCharacter = Cast<AValorCharacter>(GetInstigator());
+	UAbilitySystemComponent* TargetAbilitySystem = Victim.GetAbilitySystemComponent();
+	UAbilitySystemComponent* SourceAbilitySystem = InstigatorCharacter && InstigatorCharacter->GetAbilitySystemComponent() ? InstigatorCharacter->GetAbilitySystemComponent() : TargetAbilitySystem;
+	if (!SourceAbilitySystem || !TargetAbilitySystem)
+	{
+		return;
+	}
+
+	FGameplayEffectContextHandle Context = SourceAbilitySystem->MakeEffectContext();
+	Context.AddInstigator(InstigatorCharacter, this);
+	Context.AddOrigin(GetActorLocation());
+	const FGameplayEffectSpecHandle Spec = SourceAbilitySystem->MakeOutgoingSpec(UValorDamageGameplayEffect::StaticClass(), 1.0f, Context);
+	if (Spec.IsValid())
+	{
+		Spec.Data->SetSetByCallerMagnitude(ValorGameplayTags::SetByCaller_Damage, Damage);
+		SourceAbilitySystem->ApplyGameplayEffectSpecToTarget(*Spec.Data.Get(), TargetAbilitySystem);
+	}
+}
+
+AValorDamageZone_Inferno::AValorDamageZone_Inferno()
+{
+	LifetimeSeconds = 7.0f;
+	RadiusCm = 600.0f;
+	DamagePerSecond = 40.0f;
+}
+
+AValorReconPulse_Wide::AValorReconPulse_Wide()
+{
+	RadiusCm = 5000.0f;
+	RevealSeconds = 4.0f;
+}
+
+AValorAbilityWall_Small::AValorAbilityWall_Small()
+{
+	MaxHealth = 400.0f;
+	Size = FVector(30.0f, 250.0f, 200.0f);
+	LifetimeSeconds = 15.0f;
+}
+
+AValorProjectile_Incendiary::AValorProjectile_Incendiary()
+{
+	PayloadClass = AValorDamageZone::StaticClass();
+	InitialSpeed = 1400.0f;
+	bBounce = true;
+	bDetonateOnStop = true;
+	FuseSeconds = 2.5f;
+	PayloadHeightOffset = 5.0f;
+}
+
+AValorProjectile_Inferno::AValorProjectile_Inferno()
+{
+	PayloadClass = AValorDamageZone_Inferno::StaticClass();
+	InitialSpeed = 2000.0f;
+	bBounce = true;
+	bDetonateOnStop = true;
+	FuseSeconds = 3.0f;
+	PayloadHeightOffset = 5.0f;
 }

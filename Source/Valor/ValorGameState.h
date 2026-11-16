@@ -135,6 +135,10 @@ public:
 	// 상점이 열려 있는가(구매 단계).
 	bool IsBuyPhase() const { return bUsesRounds && RoundPhase == EValorRoundPhase::BuyPhase; }
 
+	// === 요원 목록(요원 선택 창이 읽는다, 게임 모드가 정해 복제) ===
+	const TArray<TSubclassOf<class UValorAgentDefinition>>& GetAgentRoster() const { return AgentRoster; }
+	void SetAgentRoster(const TArray<TSubclassOf<class UValorAgentDefinition>>& NewRoster) { AgentRoster = NewRoster; ForceNetUpdate(); }
+
 	// === 상점 ===
 	const TArray<FValorShopWeaponEntry>& GetShopWeapons() const { return ShopWeapons; }
 	const TArray<FValorShieldOffer>& GetShopShields() const { return ShopShields; }
@@ -161,6 +165,9 @@ protected:
 
 	UPROPERTY(Replicated)
 	bool bUsesRounds = false;
+
+	UPROPERTY(Replicated)
+	TArray<TSubclassOf<class UValorAgentDefinition>> AgentRoster;
 
 	UPROPERTY(Replicated)
 	bool bFreezeDuringBuyPhase = false;

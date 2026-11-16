@@ -118,11 +118,20 @@ void AValorPlayerController::SetBuyMenuOpen(bool bOpen)
 	}
 
 	bBuyMenuOpen = bOpen;
+	ApplyCursorMode(bOpen || bAgentSelectOpen);
+}
 
+void AValorPlayerController::ApplyCursorMode(bool bCursor)
+{
 	// 메뉴는 캔버스 HUD의 클릭 영역(HitBox)으로 고른다: 커서 + 클릭 이벤트를 켜고, 마우스가 시점을 돌리지 않게 한다.
-	bShowMouseCursor = bOpen;
-	bEnableClickEvents = bOpen;
-	if (bOpen)
+	if (bShowMouseCursor == bCursor)
+	{
+		return;
+	}
+
+	bShowMouseCursor = bCursor;
+	bEnableClickEvents = bCursor;
+	if (bCursor)
 	{
 		FInputModeGameAndUI InputMode;
 		InputMode.SetHideCursorDuringCapture(false);
@@ -169,6 +178,18 @@ void AValorPlayerController::PlayerTick(float DeltaTime)
 			{
 				UpdateSpectateCamera(DeltaTime, false);
 			}
+		}
+	}
+
+	// 요원 선택 창: 선택 단계 동안 열어 둔다(확정한 뒤에도 팀 선택을 보도록 단계가 끝날 때까지).
+	if (IsLocalController())
+	{
+		const AValorGameState* SelectGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
+		const bool bShouldOpen = SelectGameState && SelectGameState->UsesRounds() && SelectGameState->GetRoundPhase() == EValorRoundPhase::AgentSelect;
+		if (bShouldOpen != bAgentSelectOpen)
+		{
+			bAgentSelectOpen = bShouldOpen;
+			ApplyCursorMode(bAgentSelectOpen || bBuyMenuOpen);
 		}
 	}
 
@@ -488,4 +509,20 @@ float AValorPlayerController::GetFlashAlpha() const
 	}
 	const float HoldSeconds = FlashSeconds * 0.7f;
 	return Elapsed <= HoldSeconds ? 1.0f : 1.0f - ((Elapsed - HoldSeconds) / (FlashSeconds - HoldSeconds));
+}
+
+void AValorPlayerController::ServerSelectAgent_Implementation(TSubclassOf<UValorAgentDefinition> AgentClass)
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TrySelectAgent(this, AgentClass);
+	}
+}
+
+void AValorPlayerController::ServerLockAgent_Implementation()
+{
+	if (AValorMatchGameMode* MatchGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AValorMatchGameMode>() : nullptr)
+	{
+		MatchGameMode->TryLockAgent(this);
+	}
 }

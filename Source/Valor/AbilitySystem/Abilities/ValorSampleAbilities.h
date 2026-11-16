@@ -80,6 +80,19 @@ protected:
 	float MaxRangeCm = 1500.0f;
 };
 
+// 자기 자리에서 효과(PayloadClass: 정찰 펄스 등)를 바로 만든다.
+UCLASS()
+class VALOR_API UValorAbility_PulseAtSelf : public UValorAgentAbility
+{
+	GENERATED_BODY()
+
+protected:
+	virtual void ActivateAgentAbility() override;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Ability")
+	TSubclassOf<class AValorAbilityActor> PayloadClass;
+};
+
 // 과충전(궁극기): 체력과 실드(중형 실드 50)를 가득 채운다.
 UCLASS()
 class VALOR_API UValorAbility_Overdrive : public UValorAgentAbility
@@ -122,6 +135,54 @@ public:
 	UValorAbility_ThrowRecon();
 };
 
+UCLASS()
+class VALOR_API UValorAbility_ThrowIncendiary : public UValorAbility_Throw
+{
+	GENERATED_BODY()
+
+public:
+	UValorAbility_ThrowIncendiary();
+};
+
+UCLASS()
+class VALOR_API UValorAbility_ThrowInferno : public UValorAbility_Throw
+{
+	GENERATED_BODY()
+
+public:
+	UValorAbility_ThrowInferno();
+};
+
+// 넓은 정찰(자기 자리에서 반경 50m).
+UCLASS()
+class VALOR_API UValorAbility_Watchtower : public UValorAbility_PulseAtSelf
+{
+	GENERATED_BODY()
+
+public:
+	UValorAbility_Watchtower();
+};
+
+// 소형 벽 세우기.
+UCLASS()
+class VALOR_API UValorAbility_DeployWallSmall : public UValorAbility_DeployWall
+{
+	GENERATED_BODY()
+
+public:
+	UValorAbility_DeployWallSmall();
+};
+
+// 짧은 돌진: 수평 1100.
+UCLASS()
+class VALOR_API UValorAbility_DashShort : public UValorAbility_Launch
+{
+	GENERATED_BODY()
+
+public:
+	UValorAbility_DashShort() { ForwardSpeed = 1100.0f; UpSpeed = 100.0f; }
+};
+
 // 돌진: 수평 1600.
 UCLASS()
 class VALOR_API UValorAbility_Dash : public UValorAbility_Launch
@@ -159,4 +220,24 @@ class VALOR_API UValorAgent_Flare : public UValorAgentDefinition
 
 public:
 	UValorAgent_Flare();
+};
+
+// Cinder: C 섬광탄(150, 1회) / Q 화염탄(250, 1회) / E 짧은 돌진(매 라운드 무료) / X 대형 화염(7포인트).
+UCLASS()
+class VALOR_API UValorAgent_Cinder : public UValorAgentDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UValorAgent_Cinder();
+};
+
+// Rook: C 정찰 다트(200, 1회) / Q 지속 회복(150, 1회) / E 소형 벽(매 라운드 무료) / X 넓은 정찰(6포인트).
+UCLASS()
+class VALOR_API UValorAgent_Rook : public UValorAgentDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UValorAgent_Rook();
 };

@@ -1,3 +1,4 @@
+#include "Components/CapsuleComponent.h"
 #include "Components/ValorCharacterMovementComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -23,7 +24,7 @@
 // 설치 중 이동 고정, 설치 보너스 300, 설치 단계 전환, 폭발(공격 승)과 폭발 반경 안의 사망을 확인하고 화면을 PNG로 저장한다.
 // 맵에 지점이 없으면 경기 모드가 만든 임시 지점 A·B를 쓴다. 저장 위치: Saved/SpikeFlow. 로그는 SPIKE로 시작한다.
 // 실행:
-//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=15?BuyTime=3?RoundTime=60?SpikeTime=5?RoundEndTime=3"
+//   UnrealEditor.exe Valor.uproject "/Game/Maps/ThridPersonExampleMap?game=Match?PreMatchTime=15?SelectTime=1?BuyTime=3?RoundTime=60?SpikeTime=5?RoundEndTime=3"
 //     -game -windowed -ResX=1280 -ResY=720 -ExecCmds="Automation RunTests Valor.Tools.SpikeFlow; Quit"
 // =====================================================================================================
 
@@ -93,10 +94,22 @@ namespace ValorSpikeFlowTool
 				{
 					Sites.Add(*It);
 				}
-				Test->AddInfo(FString::Printf(TEXT("SPIKE combat: sites=%d carrier=%s state=%d"), Sites.Num(), *GetNameSafe(Spike->GetCarrier()), static_cast<int32>(Spike->GetState())));
-				Expect(Sites.Num() >= 2, TEXT("지점이 둘 이상(맵 또는 임시)"));
+				// 맵마다 지점 배치가 다르다(맵에 없으면 임시 A·B, 맵에 있으면 그 지점들). 스폰이 지점 안이면 "밖에서 설치 불가" 확인은 건너뛴다.
+				const float HalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+				const AValorSpikeSite* SpawnSite = AValorSpikeSite::FindSiteContaining(World, Character->GetActorLocation() - FVector(0.0f, 0.0f, HalfHeight));
+				FString SiteList;
+				for (const AValorSpikeSite* Site : Sites)
+				{
+					SiteList += FString::Printf(TEXT(" %s@%s"), *Site->GetSiteName().ToString(), *Site->GetActorLocation().ToCompactString());
+				}
+				Test->AddInfo(FString::Printf(TEXT("SPIKE combat: sites=%d [%s ] carrier=%s state=%d spawnInsideSite=%s"), Sites.Num(), *SiteList, *GetNameSafe(Spike->GetCarrier()),
+					static_cast<int32>(Spike->GetState()), SpawnSite ? *SpawnSite->GetSiteName().ToString() : TEXT("none")));
+				Expect(Sites.Num() >= 1, TEXT("지점이 하나 이상(맵 또는 임시)"));
 				Expect(Spike->GetCarrier() == Character && Spike->GetState() == EValorSpikeState::Carried, TEXT("공격(혼자)이 스파이크를 들고 시작"));
-				Expect(!Spike->CanBeUsedBy(*Character), TEXT("지점 밖에서는 설치할 수 없음"));
+				if (!SpawnSite)
+				{
+					Expect(!Spike->CanBeUsedBy(*Character), TEXT("지점 밖에서는 설치할 수 없음"));
+				}
 
 				AValorSpikeSite* const* FoundSiteA = Sites.FindByPredicate([](const AValorSpikeSite* Site) { return Site->GetSiteName() == TEXT("A"); });
 				const AValorSpikeSite* SiteA = FoundSiteA ? *FoundSiteA : nullptr;

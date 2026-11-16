@@ -51,6 +51,10 @@ public:
 	// 개발용: 궁극기 포인트를 정한다.
 	void DebugSetUltimatePoints(AController* Target, int32 Points);
 
+	// 요원 선택 단계(서버). 고르기는 같은 팀이 확정한 요원이면 거부, 확정은 고른 요원이 있어야 한다.
+	bool TrySelectAgent(AController* Player, TSubclassOf<class UValorAgentDefinition> AgentClass);
+	bool TryLockAgent(AController* Player);
+
 	// 요원 바꾸기(이름으로, AvailableAgents에서 찾음). 충전은 그 요원의 경제 초기화 상태로, 지금 캐릭터의 스킬도 바로 바꾼다.
 	bool SetAgentByName(AController* Target, const FString& AgentName);
 
@@ -116,6 +120,14 @@ protected:
 	// 접속하면 받는 요원(요원 선택 화면은 이후). 지금은 샘플 요원 Drift.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent")
 	TSubclassOf<class UValorAgentDefinition> DefaultAgentClass;
+
+	// 경기 시작 전에 요원 선택 단계를 둔다(끄면 모두 기본 요원으로 바로 시작).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent")
+	bool bUseAgentSelect = true;
+
+	// 요원 선택 시간(초). URL ?SelectTime=으로 바꿀 수 있다.
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent", meta=(ClampMin="1.0"))
+	float AgentSelectSeconds = 30.0f;
 
 	// 고를 수 있는 요원(요원 선택·개발 명령 ValorAgent).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Agent")
@@ -188,6 +200,10 @@ private:
 
 	// 스킬: 요원 지정(없으면 기본 요원), 라운드 시작 충전, 궁극기 포인트, 캐릭터에 스킬 부여.
 	void EnsureAgent(AValorPlayerState& PlayerState) const;
+	void BeginAgentSelect();
+	void FinishAgentSelect();
+	TArray<const UClass*> GetAgentsLockedByTeam(EValorTeam Team, const AValorPlayerState* Except) const;
+	void LockFallbackAgent(AValorPlayerState& PlayerState) const;
 	void RefreshAbilityChargesForRound(AValorPlayerState& PlayerState, bool bEconomyReset) const;
 	void AddUltimatePoints(AValorPlayerState* PlayerState, int32 Points) const;
 	void GrantAgentAbilities(class AValorCharacter& Character) const;

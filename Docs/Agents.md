@@ -9,7 +9,7 @@
 |---|---|---|
 | 5-1 스킬 틀 | 네 칸, 충전, 상점 구매·되팔기, 시그니처 무료 충전, 궁극기 포인트, 입력, HUD, 요원 정의 | 완료 |
 | 5-2 스킬 부품 | 투척물(튕김·붙음), 연막(시야 차단), 섬광(시선 각도·가림 판정), 이동(돌진·도약, 이동 예측), 지속 회복, 벽, 정찰(위치 표시) | 완료(샘플 요원 Drift·Flare) |
-| 5-3 요원 | 부품을 조합한 요원 몇 명, 요원 선택 화면 | 이후 |
+| 5-3 요원 | 요원 선택 단계·화면, 요원 4명(Drift·Flare·Cinder·Rook), 화염 지대·넓은 정찰·소형 벽·짧은 돌진 부품 추가 | 완료 |
 
 ## 2. 스킬 틀(5-1)
 
@@ -44,6 +44,8 @@
 | 정찰 | `AValorReconPulse` | 반경 15m 안, 가림 없이 보이는 적을 3초 동안 우리 팀 화면에 "SPOTTED"로 표시(벽 너머로 보임, 캐릭터 복제 값) |
 | 벽 | `AValorAbilityWall` | 캐릭터·탄·카메라를 막는다. 체력 800, 총에 맞으면 그 무기 몸통 피해만큼 깎이고 0이면 부서진다. 20초 |
 | 지속 회복 | `AValorHealOverTime` | 4초 동안 60을 나눠 준다(서버 전용, 대상에 붙음) |
+| 화염 지대 | `AValorDamageZone` | 반경 3.5m 안 모두(자신·아군 포함)에게 초당 30 피해, 4초. 대형(`_Inferno`)은 6m·초당 40·7초. 처치는 만든 사람 |
+| 자기 위치 효과 | `UValorAbility_PulseAtSelf` | 내 자리에 효과를 바로 만든다(넓은 정찰: 반경 50m, 4초 표시) |
 | 이동 | `UValorAbility_Launch` | 수평·위 속도로 튀어 오른다(돌진·도약). 이동 예측 실행 |
 
 범용 스킬: `UValorAbility_Throw`(투척물 클래스), `UValorAbility_Launch`, `UValorAbility_HealOverTime`, `UValorAbility_DeployWall`, `UValorAbility_Overdrive`. 수치만 다른 프리셋은 하위 클래스로 둔다(`UValorAbility_ThrowSmoke` 등, BP로도 가능).
@@ -54,6 +56,17 @@
 |---|---|---|---|---|
 | Drift | Mend: 지속 회복 60(200, 1회) | Smoke Canister: 연막 통(100, 2회) | Dash: 돌진 4.8m | Overdrive: 체력·실드 가득(6점) |
 | Flare | Updraft: 도약 3.3m(150, 2회) | Flash Charge: 섬광탄(200, 2회) | Recon Dart: 정찰 다트 | Barrier: 방벽(6점) |
+| Cinder | Flashbang: 섬광탄(150, 1회) | Firebomb: 화염탄(250, 1회) | Blaze Step: 짧은 돌진 | Inferno: 대형 화염탄(7점) |
+| Rook | Recon Dart: 정찰 다트(200, 1회) | Field Mend: 지속 회복(150, 1회) | Bulwark: 소형 벽(체력 400) | Watchtower: 넓은 정찰(6점) |
+
+## 4-1. 요원 선택(5-3)
+
+- 경기 시작 전(접속 대기 뒤)과 새 경기마다 요원 선택 단계(기본 30초, `?SelectTime=`)가 있다. 이동·사격 불가, 화면에 요원 선택 창이 뜨고 커서가 보인다.
+- 카드를 클릭해 고르고(SELECTED) LOCK IN으로 확정한다(LOCKED). 같은 팀이 확정한 요원은 고를 수 없다(TAKEN: 이름). 아래에 팀원 선택 상황이 보인다.
+- 사람이 모두 확정하면 1초 뒤 1라운드. 시간이 끝나면 고른 요원으로 자동 확정, 안 골랐거나 이미 쓰였으면 같은 팀이 안 쓴 첫 요원(다 쓰였으면 중복 허용).
+- 봇은 선택 시작에 남은 요원을 바로 확정한다.
+- 상태: PlayerState(요원 클래스, 확정 여부 복제), GameState(요원 목록 복제), 서버 RPC(`ServerSelectAgent`, `ServerLockAgent`) → 게임 모드가 검사.
+- 경기 모드의 `bUseAgentSelect`를 끄면 선택 없이 기본 요원으로 시작한다.
 
 모양은 엔진 기본 도형(구·정육면체)이다. 이펙트·소리·애니메이션은 디자인 때 BP에서 바꾼다.
 
@@ -72,4 +85,6 @@
 | `ValorCredits 9000` | 크레딧(스킬 구매 확인) |
 | `Valor.Match.Rules.Abilities` | 라운드 시작 충전, 구매 조건, 궁극기 포인트 상한 |
 | `Valor.Tools.AgentFlow` | 혼자(Drift): 스킬 구매·되팔기, 실제 C·Q·E·X 키 사용(연막 통 착지 연막, 지속 회복, 돌진, 과충전), 충전 소모, 궁극기, 다음 라운드 충전 유지·시그니처 재충전, 화면 캡처(`Saved/AgentFlow`) |
+| `Valor.Match.Rules.Abilities` | (추가) 요원 자동 배정 규칙 |
+| `Valor.Tools.AgentSelect` | 혼자 + 봇: 선택 창 열림, 아군이 확정한 요원 못 고름, 실제 마우스로 고르기·LOCK IN, 모두 확정 시 바로 시작, Cinder 화염 지대 피해, Rook 넓은 정찰, 화면 캡처(`Saved/AgentSelect`) |
 | `Valor.Tools.AbilityBlocks` | 혼자 + 적 봇(Flare): 정찰 다트 → 적 표시, 섬광탄 → 눈부심과 회복, 도약, 방벽 → 총에 맞아 체력 감소(앞을 가린 캐릭터에 막힌 탄은 벽에 안 닿음), 다음 라운드 정리, 화면 캡처(`Saved/AbilityBlocks`) |

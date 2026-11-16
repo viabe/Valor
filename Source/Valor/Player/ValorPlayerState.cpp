@@ -3,6 +3,20 @@
 #include "Net/UnrealNetwork.h"
 #include "Weapons/ValorWeaponBase.h"
 
+AValorPlayerState::AValorPlayerState()
+{
+	// 엔진 기본 PlayerState는 초당 1번만 복제한다(APlayerState: NetUpdateFrequency = 1). 크레딧·구매·요원 선택처럼 클릭에 바로 답해야 하는 값이
+	// 여기 있어서, 클라 화면에는 최대 1초(평균 0.5초) 늦게 보였다. 값을 바꿀 때마다 ForceNetUpdate로 다음 네트워크 틱에 바로 보내고,
+	// 그 밖의 엔진 값(이름·핑)은 초당 10번으로 둔다. 항상 높은 빈도(예: 100)로 두는 것보다 변할 때만 보내는 쪽이 플레이어 수만큼 싸다.
+	NetUpdateFrequency = 10.0f;
+}
+
+void AValorPlayerState::NotifyReplicatedStateChanged()
+{
+	// 독립 실행(네트워크 없음)에서는 아무 일도 하지 않는다.
+	ForceNetUpdate();
+}
+
 void AValorPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -16,6 +30,7 @@ void AValorPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(AValorPlayerState, AgentClass);
 	DOREPLIFETIME(AValorPlayerState, AbilityCharges);
 	DOREPLIFETIME(AValorPlayerState, UltimatePoints);
+	DOREPLIFETIME(AValorPlayerState, bAgentLocked);
 }
 
 void AValorPlayerState::AddKill(bool bHeadshot)
@@ -30,6 +45,7 @@ void AValorPlayerState::AddKill(bool bHeadshot)
 	{
 		++HeadshotKills;
 	}
+	NotifyReplicatedStateChanged();
 }
 
 void AValorPlayerState::AddDeath()
@@ -40,6 +56,7 @@ void AValorPlayerState::AddDeath()
 	}
 
 	++Deaths;
+	NotifyReplicatedStateChanged();
 }
 
 void AValorPlayerState::ResetScore()
@@ -52,6 +69,7 @@ void AValorPlayerState::ResetScore()
 	Kills = 0;
 	Deaths = 0;
 	HeadshotKills = 0;
+	NotifyReplicatedStateChanged();
 }
 
 void AValorPlayerState::SetTeam(EValorTeam NewTeam)
@@ -59,6 +77,7 @@ void AValorPlayerState::SetTeam(EValorTeam NewTeam)
 	if (HasAuthority())
 	{
 		Team = NewTeam;
+		NotifyReplicatedStateChanged();
 	}
 }
 
@@ -67,6 +86,7 @@ void AValorPlayerState::SetCredits(int32 NewCredits)
 	if (HasAuthority())
 	{
 		Credits = ValorMatchRules::ClampCredits(NewCredits);
+		NotifyReplicatedStateChanged();
 	}
 }
 
@@ -90,6 +110,7 @@ void AValorPlayerState::AddRoundPurchase(const FValorRoundPurchase& Purchase)
 	if (HasAuthority())
 	{
 		RoundPurchases.Add(Purchase);
+		NotifyReplicatedStateChanged();
 	}
 }
 
@@ -103,6 +124,7 @@ bool AValorPlayerState::TakeWeaponPurchase(const UClass* WeaponClass, FValorRoun
 
 	OutPurchase = RoundPurchases[Index];
 	RoundPurchases.RemoveAt(Index);
+	NotifyReplicatedStateChanged();
 	return true;
 }
 
@@ -116,6 +138,7 @@ bool AValorPlayerState::TakeShieldPurchase(int32 ShieldIndex, FValorRoundPurchas
 
 	OutPurchase = RoundPurchases[Index];
 	RoundPurchases.RemoveAt(Index);
+	NotifyReplicatedStateChanged();
 	return true;
 }
 
@@ -124,6 +147,7 @@ void AValorPlayerState::ClearRoundPurchases()
 	if (HasAuthority())
 	{
 		RoundPurchases.Reset();
+		NotifyReplicatedStateChanged();
 	}
 }
 
@@ -144,6 +168,7 @@ bool AValorPlayerState::TakeAbilityPurchase(EValorAbilitySlot Slot, FValorRoundP
 
 	OutPurchase = RoundPurchases[Index];
 	RoundPurchases.RemoveAt(Index);
+	NotifyReplicatedStateChanged();
 	return true;
 }
 
@@ -164,6 +189,7 @@ void AValorPlayerState::SetAgentClass(TSubclassOf<UValorAgentDefinition> NewAgen
 	{
 		AgentClass = NewAgentClass;
 		AbilityCharges.Init(0, ValorAbilityRules::SlotCount);
+		NotifyReplicatedStateChanged();
 	}
 }
 
@@ -179,6 +205,7 @@ void AValorPlayerState::SetAbilityCharges(EValorAbilitySlot Slot, int32 Charges)
 		AbilityCharges.SetNumZeroed(ValorAbilityRules::SlotCount);
 	}
 	AbilityCharges[SlotIndex] = FMath::Max(0, Charges);
+	NotifyReplicatedStateChanged();
 }
 
 void AValorPlayerState::SetUltimatePoints(int32 Points)
@@ -186,5 +213,15 @@ void AValorPlayerState::SetUltimatePoints(int32 Points)
 	if (HasAuthority())
 	{
 		UltimatePoints = FMath::Max(0, Points);
+		NotifyReplicatedStateChanged();
+	}
+}
+
+void AValorPlayerState::SetAgentLocked(bool bLocked)
+{
+	if (HasAuthority())
+	{
+		bAgentLocked = bLocked;
+		NotifyReplicatedStateChanged();
 	}
 }

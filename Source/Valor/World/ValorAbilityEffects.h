@@ -146,3 +146,88 @@ class VALOR_API AValorProjectile_Recon : public AValorAbilityProjectile
 public:
 	AValorProjectile_Recon();
 };
+
+/**
+ * 화염 지대: 반경 안 살아 있는 캐릭터(팀 구분 없음, 자신 포함)에게 TickSeconds마다 초당 DamagePerSecond 피해를 준다.
+ * 피해는 기존 피해 GE로 보낸다(만든 사람이 처치자, 킬피드 무기 칸은 비어 있음). 수명이 끝나면 꺼진다.
+ */
+UCLASS()
+class VALOR_API AValorDamageZone : public AValorAbilityActor
+{
+	GENERATED_BODY()
+
+public:
+	AValorDamageZone();
+
+	virtual void Tick(float DeltaSeconds) override;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|DamageZone", meta=(ClampMin="10.0"))
+	float RadiusCm = 350.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|DamageZone", meta=(ClampMin="0.0"))
+	float DamagePerSecond = 30.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Valor|DamageZone", meta=(ClampMin="0.05"))
+	float TickSeconds = 0.25f;
+
+protected:
+	virtual void PostInitializeComponents() override;
+
+	UPROPERTY(VisibleAnywhere, Category="Valor|DamageZone")
+	TObjectPtr<UStaticMeshComponent> Mesh;
+
+private:
+	void ApplyZoneDamage(AValorCharacter& Victim, float Damage);
+
+	float Accumulated = 0.0f;
+};
+
+// 대형 화염(궁극기용): 반경 6m, 7초, 초당 40.
+UCLASS()
+class VALOR_API AValorDamageZone_Inferno : public AValorDamageZone
+{
+	GENERATED_BODY()
+
+public:
+	AValorDamageZone_Inferno();
+};
+
+// 넓은 정찰(궁극기용): 반경 50m, 4초 표시.
+UCLASS()
+class VALOR_API AValorReconPulse_Wide : public AValorReconPulse
+{
+	GENERATED_BODY()
+
+public:
+	AValorReconPulse_Wide();
+};
+
+// 소형 벽(시그니처용): 너비 2.5m, 높이 2m, 체력 400, 15초.
+UCLASS()
+class VALOR_API AValorAbilityWall_Small : public AValorAbilityWall
+{
+	GENERATED_BODY()
+
+public:
+	AValorAbilityWall_Small();
+};
+
+// 화염탄: 튕기다 멈추면 화염 지대.
+UCLASS()
+class VALOR_API AValorProjectile_Incendiary : public AValorAbilityProjectile
+{
+	GENERATED_BODY()
+
+public:
+	AValorProjectile_Incendiary();
+};
+
+// 대형 화염탄(궁극기): 멀리 날아가 멈추면 대형 화염.
+UCLASS()
+class VALOR_API AValorProjectile_Inferno : public AValorAbilityProjectile
+{
+	GENERATED_BODY()
+
+public:
+	AValorProjectile_Inferno();
+};

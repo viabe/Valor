@@ -3,6 +3,7 @@
 #include "Misc/PackageName.h"
 #include "Net/UnrealNetwork.h"
 #include "Weapons/ValorWeaponBase.h"
+#include "AbilitySystem/ValorAgentTypes.h"
 
 AValorGameState::AValorGameState()
 {
@@ -46,6 +47,7 @@ void AValorGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AValorGameState, bUsesRounds);
+	DOREPLIFETIME(AValorGameState, AgentRoster);
 	DOREPLIFETIME(AValorGameState, bFreezeDuringBuyPhase);
 	DOREPLIFETIME(AValorGameState, bBlockFireDuringBuyPhase);
 	DOREPLIFETIME(AValorGameState, RoundPhase);
@@ -107,6 +109,9 @@ void AValorGameState::SetRoundPhase(EValorRoundPhase NewPhase, float DurationSec
 
 	RoundPhase = NewPhase;
 	PhaseEndServerTime = DurationSeconds > 0.0f ? static_cast<float>(GetServerWorldTimeSeconds()) + DurationSeconds : 0.0f;
+	// GameState는 초당 10번 복제(AInfo 기본)라 단계 전환이 클라에 최대 0.1초 늦게 닿는다. 이동 고정·사격 허용을 클라도 이 값으로 예측하므로
+	// 바뀐 틱에 바로 보낸다(늦으면 그 사이 움직임이 서버 보정으로 되돌려진다).
+	ForceNetUpdate();
 }
 
 void AValorGameState::SetRoundNumber(int32 NewRoundNumber, EValorTeam NewAttackingTeam)
@@ -115,6 +120,7 @@ void AValorGameState::SetRoundNumber(int32 NewRoundNumber, EValorTeam NewAttacki
 	{
 		RoundNumber = NewRoundNumber;
 		AttackingTeam = NewAttackingTeam;
+		ForceNetUpdate();
 	}
 }
 
@@ -124,6 +130,7 @@ void AValorGameState::SetTeamScores(int32 NewScoreA, int32 NewScoreB)
 	{
 		ScoreA = NewScoreA;
 		ScoreB = NewScoreB;
+		ForceNetUpdate();
 	}
 }
 
@@ -133,6 +140,7 @@ void AValorGameState::SetRoundResult(EValorTeam Winner, EValorRoundEndReason Rea
 	{
 		LastRoundWinner = Winner;
 		LastRoundEndReason = Reason;
+		ForceNetUpdate();
 	}
 }
 
@@ -141,6 +149,7 @@ void AValorGameState::SetMatchWinner(EValorTeam Winner)
 	if (HasAuthority())
 	{
 		MatchWinner = Winner;
+		ForceNetUpdate();
 	}
 }
 
@@ -181,12 +190,13 @@ bool AValorGameState::IsWeaponFireAllowed() const
 		return true;
 	}
 
-	return RoundPhase != EValorRoundPhase::MatchEnd && !(RoundPhase == EValorRoundPhase::BuyPhase && bBlockFireDuringBuyPhase);
+	return RoundPhase != EValorRoundPhase::MatchEnd && RoundPhase != EValorRoundPhase::AgentSelect && !(RoundPhase == EValorRoundPhase::BuyPhase && bBlockFireDuringBuyPhase);
 }
 
 bool AValorGameState::IsMovementLocked() const
 {
-	return bUsesRounds && bFreezeDuringBuyPhase && RoundPhase == EValorRoundPhase::BuyPhase;
+	// 요원 선택 중에는 항상 묶는다(선택 창을 보는 시간).
+	return bUsesRounds && (RoundPhase == EValorRoundPhase::AgentSelect || (bFreezeDuringBuyPhase && RoundPhase == EValorRoundPhase::BuyPhase));
 }
 
 void AValorGameState::BroadcastKill(const FValorKillFeedEntry& Entry)

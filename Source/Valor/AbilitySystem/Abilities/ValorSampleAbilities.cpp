@@ -137,6 +137,38 @@ void UValorAbility_Overdrive::ActivateAgentAbility()
 	AbilitySystem->SetNumericAttributeBase(UValorCombatAttributeSet::GetShieldAttribute(), MaxShield);
 }
 
+void UValorAbility_PulseAtSelf::ActivateAgentAbility()
+{
+	AValorCharacter* Character = GetValorCharacter();
+	UWorld* World = Character ? Character->GetWorld() : nullptr;
+	if (!World || !Character->HasAuthority() || !PayloadClass)
+	{
+		return;
+	}
+
+	World->SpawnActor<AValorAbilityActor>(PayloadClass, FTransform(Character->GetPawnViewLocation()), ValorSampleAbilities::MakeSpawnParameters(Character));
+}
+
+UValorAbility_ThrowIncendiary::UValorAbility_ThrowIncendiary()
+{
+	ProjectileClass = AValorProjectile_Incendiary::StaticClass();
+}
+
+UValorAbility_ThrowInferno::UValorAbility_ThrowInferno()
+{
+	ProjectileClass = AValorProjectile_Inferno::StaticClass();
+}
+
+UValorAbility_Watchtower::UValorAbility_Watchtower()
+{
+	PayloadClass = AValorReconPulse_Wide::StaticClass();
+}
+
+UValorAbility_DeployWallSmall::UValorAbility_DeployWallSmall()
+{
+	WallClass = AValorAbilityWall_Small::StaticClass();
+}
+
 UValorAbility_ThrowSmoke::UValorAbility_ThrowSmoke()
 {
 	ProjectileClass = AValorProjectile_Smoke::StaticClass();
@@ -181,4 +213,22 @@ UValorAgent_Flare::UValorAgent_Flare()
 	ValorSampleAbilities::SetSlot(Ability2, TEXT("Flash Charge"), UValorAbility_ThrowFlash::StaticClass(), 200, 2, 0, 0);
 	ValorSampleAbilities::SetSlot(Signature, TEXT("Recon Dart"), UValorAbility_ThrowRecon::StaticClass(), 0, 1, 1, 0);
 	ValorSampleAbilities::SetSlot(Ultimate, TEXT("Barrier"), UValorAbility_DeployWall::StaticClass(), 0, 0, 0, 6);
+}
+
+UValorAgent_Cinder::UValorAgent_Cinder()
+{
+	DisplayName = FText::FromString(TEXT("Cinder"));
+	ValorSampleAbilities::SetSlot(Ability1, TEXT("Flashbang"), UValorAbility_ThrowFlash::StaticClass(), 150, 1, 0, 0);
+	ValorSampleAbilities::SetSlot(Ability2, TEXT("Firebomb"), UValorAbility_ThrowIncendiary::StaticClass(), 250, 1, 0, 0);
+	ValorSampleAbilities::SetSlot(Signature, TEXT("Blaze Step"), UValorAbility_DashShort::StaticClass(), 0, 1, 1, 0);
+	ValorSampleAbilities::SetSlot(Ultimate, TEXT("Inferno"), UValorAbility_ThrowInferno::StaticClass(), 0, 0, 0, 7);
+}
+
+UValorAgent_Rook::UValorAgent_Rook()
+{
+	DisplayName = FText::FromString(TEXT("Rook"));
+	ValorSampleAbilities::SetSlot(Ability1, TEXT("Recon Dart"), UValorAbility_ThrowRecon::StaticClass(), 200, 1, 0, 0);
+	ValorSampleAbilities::SetSlot(Ability2, TEXT("Field Mend"), UValorAbility_HealOverTime::StaticClass(), 150, 1, 0, 0);
+	ValorSampleAbilities::SetSlot(Signature, TEXT("Bulwark"), UValorAbility_DeployWallSmall::StaticClass(), 0, 1, 1, 0);
+	ValorSampleAbilities::SetSlot(Ultimate, TEXT("Watchtower"), UValorAbility_Watchtower::StaticClass(), 0, 0, 0, 6);
 }
