@@ -26,6 +26,17 @@ class UValorLagCompensationComponent;
 class UValorViewmodelComponent;
 struct FValorDamageEvent;
 
+// 어시스트 판정용 기록(서버 전용): 이 캐릭터에게 피해·섬광·정찰을 준 상대 한 명.
+struct FValorAssistContribution
+{
+	TWeakObjectPtr<class AValorPlayerState> Player;
+	float TotalDamage = 0.0f;
+	// 최근 3초 피해(오래된 것은 지운다).
+	TArray<ValorScoreRules::FDamageHit> RecentHits;
+	// 섬광·정찰 효과가 끝나는 서버 시각.
+	double UtilityEndTime = -1000.0;
+};
+
 UCLASS(config=Game)
 class VALOR_API AValorCharacter : public ACharacter, public IValorWeaponOwnerInterface, public IAbilitySystemInterface
 {
@@ -199,6 +210,14 @@ public:
 	void ApplyBulletTag(float Strength);
 	const FValorTagState& GetTagState() const { return TagState; }
 
+	// === 어시스트 기록(서버 전용, 이 목숨 동안) ===
+	// 피해는 HandleDamageApplied가, 섬광·정찰·회복은 스킬 효과가 기록한다. 처치 처리(게임 모드)가 읽어 어시스트를 준다.
+	void RecordUtilityContribution(class AValorPlayerState* Source, double EffectEndServerTime);
+	void RecordHealFrom(class AValorPlayerState* Healer, double HealEndServerTime);
+	const TArray<FValorAssistContribution>& GetAssistContributions() const { return AssistContributions; }
+	class AValorPlayerState* GetLastHealer() const { return LastHealer.Get(); }
+	double GetLastHealEndTime() const { return LastHealEndTime; }
+
 	// 마지막 착지 시각(로컬 월드 시간). 착지 직후 탄퍼짐 페널티(발로란트 Jump land inaccuracy)에 쓴다.
 	double GetLastLandedWorldTime() const { return LastLandedWorldTime; }
 
@@ -313,4 +332,11 @@ private:
 
 	// 마지막 착지 시각. 시작 시에는 "오래전에 착지함"으로 두어 착지 페널티가 걸리지 않게 한다.
 	double LastLandedWorldTime = -1000.0;
+
+	// 어시스트 기록(서버 전용).
+	FValorAssistContribution& FindOrAddContribution(class AValorPlayerState* Player);
+	void RecordDamageContribution(class AValorPlayerState* Attacker, float Damage);
+	TArray<FValorAssistContribution> AssistContributions;
+	TWeakObjectPtr<class AValorPlayerState> LastHealer;
+	double LastHealEndTime = -1000.0;
 };

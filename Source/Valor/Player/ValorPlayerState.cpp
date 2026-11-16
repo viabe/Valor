@@ -24,6 +24,8 @@ void AValorPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(AValorPlayerState, Kills);
 	DOREPLIFETIME(AValorPlayerState, Deaths);
 	DOREPLIFETIME(AValorPlayerState, HeadshotKills);
+	DOREPLIFETIME(AValorPlayerState, Assists);
+	DOREPLIFETIME(AValorPlayerState, CombatScore);
 	DOREPLIFETIME(AValorPlayerState, Team);
 	DOREPLIFETIME(AValorPlayerState, Credits);
 	DOREPLIFETIME_CONDITION(AValorPlayerState, RoundPurchases, COND_OwnerOnly);
@@ -69,6 +71,9 @@ void AValorPlayerState::ResetScore()
 	Kills = 0;
 	Deaths = 0;
 	HeadshotKills = 0;
+	Assists = 0;
+	CombatScore = 0;
+	RoundKills = 0;
 	NotifyReplicatedStateChanged();
 }
 
@@ -222,6 +227,24 @@ void AValorPlayerState::SetAgentLocked(bool bLocked)
 	if (HasAuthority())
 	{
 		bAgentLocked = bLocked;
+		NotifyReplicatedStateChanged();
+	}
+}
+
+void AValorPlayerState::AddAssist()
+{
+	if (HasAuthority())
+	{
+		++Assists;
+		NotifyReplicatedStateChanged();
+	}
+}
+
+void AValorPlayerState::AddCombatScore(int32 Points)
+{
+	if (HasAuthority() && Points != 0)
+	{
+		CombatScore += Points;
 		NotifyReplicatedStateChanged();
 	}
 }

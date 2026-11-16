@@ -65,6 +65,42 @@ namespace ValorTeams
 	VALOR_API bool AreAllies(const AActor* A, const AActor* B);
 }
 
+// 점수판·어시스트 규칙(서버 게임 모드와 테스트가 같이 쓴다).
+namespace ValorScoreRules
+{
+	// 어시스트(13.10 패치 노트, 2026-11-10): 아군이 처치하기 3초 안에 10 넘게 피해, 또는 시점과 상관없이 50 이상 피해.
+	constexpr float AnyTimeAssistDamage = 50.0f;
+	constexpr float RecentAssistDamage = 10.0f;
+	constexpr double RecentAssistSeconds = 3.0;
+	// 회복 어시스트(같은 패치): 회복이 끝난 뒤 10초 안에 회복받은 아군이 처치.
+	constexpr double HealAssistSeconds = 10.0;
+	// 섬광·정찰 어시스트: 효과 중 또는 끝난 뒤 이 시간(초) 안에 처치(공개 수치 없음, 추정).
+	constexpr double UtilityAssistGraceSeconds = 1.0;
+
+	// 전투 점수(Riot 미공개, 커뮤니티 분석): 피해 1점당 1점, 처치 150/130/110/90/70(처치 전 남은 적 5/4/3/2/1명),
+	// 한 라운드 두 번째 처치부터 처치마다 +50, 피해 없는 어시스트 +25. ACS = 합계 / 라운드 수.
+	constexpr int32 MultiKillBonus = 50;
+	constexpr int32 NonDamageAssistScore = 25;
+
+	struct FDamageHit
+	{
+		double Time = 0.0;
+		float Damage = 0.0f;
+	};
+
+	// 처치 시각 기준 최근 Window초 안에 준 피해 합.
+	VALOR_API float SumRecentDamage(const TArray<FDamageHit>& Hits, double KillTime, double WindowSeconds = RecentAssistSeconds);
+	VALOR_API bool QualifiesForDamageAssist(float TotalDamage, float RecentDamage);
+	VALOR_API bool QualifiesForUtilityAssist(double EffectEndTime, double KillTime);
+	VALOR_API bool QualifiesForHealAssist(double HealEndTime, double KillTime);
+
+	// 처치 점수: 처치 직전 살아 있던 적 수(맞은 사람 포함, 1~5로 자름).
+	VALOR_API int32 ComputeKillScore(int32 EnemiesAliveBeforeKill);
+	// 이번 라운드 몇 번째 처치인지(1부터) → 추가 점수.
+	VALOR_API int32 ComputeMultiKillBonus(int32 KillNumberThisRound);
+	VALOR_API int32 ComputeAverageCombatScore(int32 TotalScore, int32 RoundsPlayed);
+}
+
 // 경기 규칙의 순수 계산(서버 게임 모드와 테스트가 같이 쓴다). 값은 발로란트 경쟁전 기준이다.
 namespace ValorMatchRules
 {

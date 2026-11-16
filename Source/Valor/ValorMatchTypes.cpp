@@ -143,3 +143,49 @@ namespace ValorSpikeRules
 		return NewProgress;
 	}
 }
+
+namespace ValorScoreRules
+{
+	float SumRecentDamage(const TArray<FDamageHit>& Hits, double KillTime, double WindowSeconds)
+	{
+		float Sum = 0.0f;
+		for (const FDamageHit& Hit : Hits)
+		{
+			if (KillTime - Hit.Time <= WindowSeconds)
+			{
+				Sum += Hit.Damage;
+			}
+		}
+		return Sum;
+	}
+
+	bool QualifiesForDamageAssist(float TotalDamage, float RecentDamage)
+	{
+		return TotalDamage >= AnyTimeAssistDamage || RecentDamage > RecentAssistDamage;
+	}
+
+	bool QualifiesForUtilityAssist(double EffectEndTime, double KillTime)
+	{
+		return EffectEndTime > 0.0 && KillTime <= EffectEndTime + UtilityAssistGraceSeconds;
+	}
+
+	bool QualifiesForHealAssist(double HealEndTime, double KillTime)
+	{
+		return HealEndTime > 0.0 && KillTime - HealEndTime <= HealAssistSeconds;
+	}
+
+	int32 ComputeKillScore(int32 EnemiesAliveBeforeKill)
+	{
+		return 150 - (20 * (5 - FMath::Clamp(EnemiesAliveBeforeKill, 1, 5)));
+	}
+
+	int32 ComputeMultiKillBonus(int32 KillNumberThisRound)
+	{
+		return KillNumberThisRound >= 2 ? MultiKillBonus : 0;
+	}
+
+	int32 ComputeAverageCombatScore(int32 TotalScore, int32 RoundsPlayed)
+	{
+		return RoundsPlayed > 0 ? FMath::RoundToInt(static_cast<float>(TotalScore) / static_cast<float>(RoundsPlayed)) : TotalScore;
+	}
+}

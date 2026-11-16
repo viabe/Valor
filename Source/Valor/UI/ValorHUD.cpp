@@ -179,6 +179,11 @@ void AValorHUD::DrawHUD()
 		DrawAgentSelect(CenterX, TextUIScale);
 	}
 
+	if (ShouldShowScoreboard())
+	{
+		DrawScoreboard(CenterX, CenterY, TextUIScale);
+	}
+
 	// 섬광 눈부심은 모든 HUD 위에 덮는다(맨 마지막).
 	DrawFlashOverlay();
 }
@@ -802,6 +807,153 @@ namespace ValorMatchHUD
 		case EValorWeaponCategory::Heavy: return TEXT("HEAVIES");
 		default: return TEXT("");
 		}
+	}
+}
+
+bool AValorHUD::ShouldShowScoreboard() const
+{
+	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+	if (!ValorController || ValorController->IsBuyMenuOpen() || ValorController->IsAgentSelectOpen())
+	{
+		return false;
+	}
+
+	// 경기가 끝나면 누르지 않아도 보여 준다(결과 확인).
+	const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
+	if (ValorGameState && ValorGameState->UsesRounds() && ValorGameState->GetRoundPhase() == EValorRoundPhase::MatchEnd)
+	{
+		return true;
+	}
+
+	// Tab은 입력 매핑 없이 키 상태로 본다(누르고 있는 동안만 보이는 표시라 서버에 알릴 것이 없다).
+	return ValorController->IsInputKeyDown(EKeys::Tab);
+}
+
+void AValorHUD::DrawScoreboard(float CenterX, float CenterY, float UIScale)
+{
+	const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
+	if (!ValorGameState || !GEngine)
+	{
+		return;
+	}
+
+	const bool bRounds = ValorGameState->UsesRounds();
+	const AValorPlayerState* LocalState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
+	const EValorTeam LocalTeam = LocalState && LocalState->GetTeam() != EValorTeam::None ? LocalState->GetTeam() : EValorTeam::TeamA;
+	const EValorTeam EnemyTeam = ValorTeams::GetOpposingTeam(LocalTeam);
+	const int32 RoundsPlayed = FMath::Max(1, ValorGameState->GetRoundNumber());
+
+	// 행 모으기: 경기 모드는 팀별, 데스매치는 한 목록. 전투 점수 순.
+	TArray<const AValorPlayerState*> Allies;
+	TArray<const AValorPlayerState*> Enemies;
+	for (const APlayerState* PlayerState : ValorGameState->PlayerArray)
+	{
+		const AValorPlayerState* ValorState = Cast<AValorPlayerState>(PlayerState);
+		if (!ValorState)
+		{
+			continue;
+		}
+		if (bRounds && ValorState->GetTeam() == EnemyTeam)
+		{
+			Enemies.Add(ValorState);
+		}
+		else
+		{
+			Allies.Add(ValorState);
+		}
+	}
+	auto ByScore = [](const AValorPlayerState& A, const AValorPlayerState& B) { return A.GetCombatScore() > B.GetCombatScore(); };
+	Allies.Sort(ByScore);
+	Enemies.Sort(ByScore);
+
+	UFont* SmallFont = GEngine->GetSmallFont();
+	UFont* LargeFont = GEngine->GetLargeFont();
+	const float Width = 840.0f * UIScale;
+	const float RowHeight = 26.0f * UIScale;
+	const float Left = CenterX - (Width * 0.5f);
+	const int32 SectionCount = bRounds ? 2 : 1;
+	const float Height = (60.0f * UIScale) + (RowHeight * (Allies.Num() + Enemies.Num() + SectionCount + 1)) + (12.0f * UIScale);
+	float Y = FMath::Max(20.0f * UIScale, CenterY - (Height * 0.5f));
+	DrawRect2D(FLinearColor::Black, Left, Y, Width, Height, 0.72f);
+
+	// 제목: 라운드·점수.
+	FString Title = TEXT("SCOREBOARD");
+	if (bRounds)
+	{
+		Title += FString::Printf(TEXT("    ROUND %d    %d : %d"), ValorGameState->GetRoundNumber(), ValorGameState->GetTeamScore(LocalTeam), ValorGameState->GetTeamScore(EnemyTeam));
+	}
+	DrawShadowedText(Title, FLinearColor::White, CenterX, Y + (10.0f * UIScale), LargeFont, 0.9f * UIScale, 0.5f);
+	Y += 50.0f * UIScale;
+
+	// 열 위치(왼쪽 기준).
+	const float NameX = Left + (16.0f * UIScale);
+	const float UltX = Left + (400.0f * UIScale);
+	const float CreditsX = Left + (500.0f * UIScale);
+	const float AcsX = Left + (610.0f * UIScale);
+	const float KillsX = Left + (690.0f * UIScale);
+	const float DeathsX = Left + (745.0f * UIScale);
+	const float AssistsX = Left + (800.0f * UIScale);
+	const FLinearColor HeaderColor(0.65f, 0.65f, 0.65f, 1.0f);
+	DrawShadowedText(TEXT("PLAYER"), HeaderColor, NameX, Y, SmallFont, UIScale, 0.0f);
+	DrawShadowedText(TEXT("ULT"), HeaderColor, UltX, Y, SmallFont, UIScale, 0.5f);
+	DrawShadowedText(TEXT("CREDITS"), HeaderColor, CreditsX, Y, SmallFont, UIScale, 0.5f);
+	DrawShadowedText(bRounds ? TEXT("ACS") : TEXT("SCORE"), HeaderColor, AcsX, Y, SmallFont, UIScale, 0.5f);
+	DrawShadowedText(TEXT("K"), HeaderColor, KillsX, Y, SmallFont, UIScale, 0.5f);
+	DrawShadowedText(TEXT("D"), HeaderColor, DeathsX, Y, SmallFont, UIScale, 0.5f);
+	DrawShadowedText(TEXT("A"), HeaderColor, AssistsX, Y, SmallFont, UIScale, 0.5f);
+	Y += RowHeight;
+
+	auto DrawSection = [&](const TArray<const AValorPlayerState*>& Rows, bool bAllySection, const FString& Label)
+	{
+		const FLinearColor TeamColor = bAllySection ? ValorMatchHUD::AllyColor : ValorMatchHUD::EnemyColor;
+		if (bRounds)
+		{
+			DrawShadowedText(Label, TeamColor, NameX, Y + (3.0f * UIScale), SmallFont, UIScale, 0.0f);
+			Y += RowHeight;
+		}
+
+		for (const AValorPlayerState* Row : Rows)
+		{
+			const AValorCharacter* RowCharacter = Cast<AValorCharacter>(Row->GetPawn());
+			const bool bAlive = RowCharacter && RowCharacter->IsAlive();
+			const bool bLocal = Row == LocalState;
+			DrawRect2D(TeamColor, Left + (6.0f * UIScale), Y, Width - (12.0f * UIScale), RowHeight - (3.0f * UIScale), bLocal ? 0.32f : 0.14f);
+
+			// 죽은 사람은 흐리게. 이름이 길면(봇 이름 등) 자른다.
+			const FLinearColor TextColor = bAlive || !bRounds ? FLinearColor::White : FLinearColor(1.0f, 1.0f, 1.0f, 0.45f);
+			FString Name = Row->GetPlayerName().Left(20);
+			if (const UValorAgentDefinition* Agent = Row->GetAgent())
+			{
+				Name += FString::Printf(TEXT("  (%s)"), *Agent->DisplayName.ToString());
+			}
+			const float TextY = Y + (4.0f * UIScale);
+			DrawShadowedText(Name, TextColor, NameX, TextY, SmallFont, UIScale, 0.0f);
+
+			// 궁극기: 포인트/필요(모두 보인다). 다 모았으면 READY.
+			const UValorAgentDefinition* Agent = Row->GetAgent();
+			const int32 UltRequired = Agent ? Agent->Ultimate.UltimatePointsRequired : 0;
+			if (UltRequired > 0)
+			{
+				const bool bReady = Row->GetUltimatePoints() >= UltRequired;
+				DrawShadowedText(bReady ? FString(TEXT("READY")) : FString::Printf(TEXT("%d/%d"), Row->GetUltimatePoints(), UltRequired),
+					bReady ? FLinearColor(1.0f, 0.85f, 0.3f) : TextColor, UltX, TextY, SmallFont, UIScale, 0.5f);
+			}
+
+			// 크레딧은 아군만(상대 경제는 보여 주지 않는다).
+			DrawShadowedText(bAllySection && bRounds ? FString::FromInt(Row->GetCredits()) : FString(TEXT("-")), TextColor, CreditsX, TextY, SmallFont, UIScale, 0.5f);
+			const int32 Score = bRounds ? ValorScoreRules::ComputeAverageCombatScore(Row->GetCombatScore(), RoundsPlayed) : Row->GetCombatScore();
+			DrawShadowedText(FString::FromInt(Score), TextColor, AcsX, TextY, SmallFont, UIScale, 0.5f);
+			DrawShadowedText(FString::FromInt(Row->GetKills()), TextColor, KillsX, TextY, SmallFont, UIScale, 0.5f);
+			DrawShadowedText(FString::FromInt(Row->GetDeaths()), TextColor, DeathsX, TextY, SmallFont, UIScale, 0.5f);
+			DrawShadowedText(FString::FromInt(Row->GetAssists()), TextColor, AssistsX, TextY, SmallFont, UIScale, 0.5f);
+			Y += RowHeight;
+		}
+	};
+
+	DrawSection(Allies, true, FString::Printf(TEXT("MY TEAM  %d"), ValorGameState->GetTeamScore(LocalTeam)));
+	if (bRounds)
+	{
+		DrawSection(Enemies, false, FString::Printf(TEXT("ENEMY TEAM  %d"), ValorGameState->GetTeamScore(EnemyTeam)));
 	}
 }
 

@@ -79,6 +79,20 @@ public:
 	UFUNCTION(BlueprintPure, Category="Valor|Score")
 	int32 GetHeadshotKills() const { return HeadshotKills; }
 
+	// 어시스트·전투 점수(점수판). 서버 전용 변경.
+	UFUNCTION(BlueprintPure, Category="Valor|Score")
+	int32 GetAssists() const { return Assists; }
+
+	UFUNCTION(BlueprintPure, Category="Valor|Score")
+	int32 GetCombatScore() const { return CombatScore; }
+
+	void AddAssist();
+	void AddCombatScore(int32 Points);
+
+	// 이번 라운드(경기 모드) 또는 이번 목숨(데스매치) 처치 수. 연속 처치 추가 점수용, 서버 전용(복제하지 않음).
+	int32 AddRoundKill() { return ++RoundKills; }
+	void ResetRoundKills() { RoundKills = 0; }
+
 	// === 팀 ===
 	UFUNCTION(BlueprintPure, Category="Valor|Match")
 	EValorTeam GetTeam() const { return Team; }
@@ -138,6 +152,15 @@ protected:
 
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Score")
 	int32 HeadshotKills = 0;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Score")
+	int32 Assists = 0;
+
+	// 경기 전체 전투 점수 합(ACS = 합 / 라운드 수).
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Score")
+	int32 CombatScore = 0;
+
+	int32 RoundKills = 0;
 
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category="Valor|Match")
 	EValorTeam Team = EValorTeam::None;

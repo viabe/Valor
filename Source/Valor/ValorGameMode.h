@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "ValorMatchTypes.h"
 #include "ValorGameMode.generated.h"
 
 class AValorCharacter;
@@ -43,6 +44,12 @@ protected:
 	virtual float GetRespawnDelayAfterDeath() const { return RespawnDelay; }
 
 	// 전적·킬피드·사망 정보를 처리한 뒤 부르는 규칙 훅(서버). 라운드제 모드가 처치 보상·전멸 판정을 여기서 한다.
+	// 처치 점수(남은 적 수·연속 처치)와 어시스트(피해·섬광·정찰·회복)를 준다. 서버 전용.
+	void AwardKillScoreAndAssists(AValorCharacter* Victim, class AValorPlayerState* VictimState, class AValorPlayerState* KillerState, bool bSelfKill);
+
+	// 이 팀 기준 지금 살아 있는 적 수(팀이 없으면 자기 말고 살아 있는 모두).
+	int32 CountAliveEnemiesOf(EValorTeam Team, const AValorPlayerState* Exclude) const;
+
 	virtual void OnCharacterKilled(AValorCharacter* Victim, AController* VictimController, class AValorPlayerState* VictimState, class AValorPlayerState* KillerState, bool bSelfKill) {}
 
 	// 사망 후 부활까지 시간(초).

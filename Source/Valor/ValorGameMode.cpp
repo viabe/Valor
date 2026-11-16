@@ -95,6 +95,9 @@ void AValorGameMode::HandleCharacterKilled(AValorCharacter* Victim, const FValor
 		KillerState->AddKill(bHeadshot);
 	}
 
+	// 1-1) 처치 점수와 어시스트(점수판).
+	AwardKillScoreAndAssists(Victim, VictimState, KillerState, bSelfKill);
+
 	// 2) 킬피드(모두에게). 무기는 처치에 쓰인 사수의 총 또는 칼(피해 GE의 EffectCauser)이다. 스킬(화염 지대 등)은 무기 표시 없음.
 	const AActor* DamageCauser = KillingEvent.DamageCauser.Get();
 	const AActor* KillerWeapon = (Cast<AValorWeaponBase>(DamageCauser) || Cast<AValorMeleeWeapon>(DamageCauser)) ? DamageCauser : nullptr;
@@ -260,6 +263,12 @@ void AValorGameMode::SetPlayerDefaults(APawn* PlayerPawn)
 {
 	Super::SetPlayerDefaults(PlayerPawn);
 
+	// 연속 처치 추가 점수는 이번 목숨(경기 모드는 라운드마다 다시 스폰하므로 이번 라운드) 기준이다.
+	if (AValorPlayerState* SpawnedState = PlayerPawn ? PlayerPawn->GetPlayerState<AValorPlayerState>() : nullptr)
+	{
+		SpawnedState->ResetRoundKills();
+	}
+
 	AValorCharacter* Character = Cast<AValorCharacter>(PlayerPawn);
 	if (!Character)
 	{
@@ -288,5 +297,79 @@ void AValorGameMode::SetPlayerDefaults(APawn* PlayerPawn)
 		{
 			CombatComponent->GiveWeapon(StartingWeaponClass, true, true);
 		}
+	}
+}
+
+int32 AValorGameMode::CountAliveEnemiesOf(EValorTeam Team, const AValorPlayerState* Exclude) const
+{
+	int32 Count = 0;
+	for (TActorIterator<AValorCharacter> It(GetWorld()); It; ++It)
+	{
+		const AValorPlayerState* CharacterState = It->GetPlayerState<AValorPlayerState>();
+		if (!It->IsAlive() || !CharacterState || CharacterState == Exclude)
+		{
+			continue;
+		}
+		if (Team == EValorTeam::None || CharacterState->GetTeam() != Team)
+		{
+			++Count;
+		}
+	}
+	return Count;
+}
+
+void AValorGameMode::AwardKillScoreAndAssists(AValorCharacter* Victim, AValorPlayerState* VictimState, AValorPlayerState* KillerState, bool bSelfKill)
+{
+	const UWorld* World = GetWorld();
+	if (!World || !Victim)
+	{
+		return;
+	}
+
+	// 적을 처치한 경우만(자기 처치·환경 처치·아군 처치는 점수와 어시스트가 없다).
+	const bool bEnemyKill = KillerState && VictimState && !bSelfKill && KillerState != VictimState
+		&& (KillerState->GetTeam() == EValorTeam::None || KillerState->GetTeam() != VictimState->GetTeam());
+	if (!bEnemyKill)
+	{
+		return;
+	}
+
+	const double Now = World->GetTimeSeconds();
+
+	// 처치 점수: 처치 직전 남은 적 수(맞은 사람은 이미 죽었으므로 +1). 연속 처치는 두 번째부터 +50.
+	const int32 EnemiesAliveBeforeKill = CountAliveEnemiesOf(KillerState->GetTeam(), KillerState) + 1;
+	const int32 KillNumber = KillerState->AddRoundKill();
+	KillerState->AddCombatScore(ValorScoreRules::ComputeKillScore(EnemiesAliveBeforeKill) + ValorScoreRules::ComputeMultiKillBonus(KillNumber));
+
+	// 피해·섬광·정찰 어시스트: 처치자 말고 그 적에게 기여한 사람(기록은 적에게서만 쌓인다). 피해 없는 어시스트는 +25.
+	TArray<const AValorPlayerState*, TInlineAllocator<4>> Assisted;
+	for (const FValorAssistContribution& Contribution : Victim->GetAssistContributions())
+	{
+		AValorPlayerState* Assister = Contribution.Player.Get();
+		if (!Assister || Assister == KillerState || Assister == VictimState)
+		{
+			continue;
+		}
+		const bool bDamageAssist = ValorScoreRules::QualifiesForDamageAssist(Contribution.TotalDamage, ValorScoreRules::SumRecentDamage(Contribution.RecentHits, Now));
+		const bool bUtilityAssist = ValorScoreRules::QualifiesForUtilityAssist(Contribution.UtilityEndTime, Now);
+		if (!bDamageAssist && !bUtilityAssist)
+		{
+			continue;
+		}
+		Assister->AddAssist();
+		if (Contribution.TotalDamage <= 0.0f)
+		{
+			Assister->AddCombatScore(ValorScoreRules::NonDamageAssistScore);
+		}
+		Assisted.Add(Assister);
+	}
+
+	// 회복 어시스트: 처치자를 회복시켜 준 아군(회복이 끝난 뒤 10초 안의 처치). 이미 같은 처치로 어시스트를 받았으면 한 번만.
+	const AValorCharacter* KillerCharacter = Cast<AValorCharacter>(KillerState->GetPawn());
+	AValorPlayerState* Healer = KillerCharacter ? KillerCharacter->GetLastHealer() : nullptr;
+	if (Healer && Healer != KillerState && Healer != VictimState && !Assisted.Contains(Healer) && ValorScoreRules::QualifiesForHealAssist(KillerCharacter->GetLastHealEndTime(), Now))
+	{
+		Healer->AddAssist();
+		Healer->AddCombatScore(ValorScoreRules::NonDamageAssistScore);
 	}
 }

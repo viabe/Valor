@@ -1,5 +1,7 @@
 #include "World/ValorAbilityEffects.h"
 
+#include "Player/ValorPlayerState.h"
+
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
 #include "AbilitySystem/Effects/ValorDamageGameplayEffect.h"
 #include "AbilitySystem/ValorAgentTypes.h"
@@ -59,10 +61,11 @@ void AValorFlashBurst::BeginPlay()
 		return;
 	}
 
+	AValorPlayerState* SourceState = GetInstigator() ? GetInstigator()->GetPlayerState<AValorPlayerState>() : nullptr;
 	for (TActorIterator<AValorCharacter> It(GetWorld()); It; ++It)
 	{
 		AValorPlayerController* ValorController = Cast<AValorPlayerController>(It->GetController());
-		if (!ValorController || !It->IsAlive())
+		if (!It->IsAlive())
 		{
 			continue;
 		}
@@ -73,9 +76,18 @@ void AValorFlashBurst::BeginPlay()
 		const float AngleDegrees = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(It->GetBaseAimRotation().Vector() | ToFlash, -1.0f, 1.0f)));
 		const bool bVisible = ValorAbilityEffects::HasLineOfSight(GetWorld(), GetActorLocation(), **It, this);
 		const float Seconds = ValorAbilityRules::ComputeFlashSeconds(AngleDegrees, bVisible, FVector::Dist(Eye, GetActorLocation()), RadiusCm, FullBlindSeconds, PartialBlindSeconds);
-		if (Seconds > 0.0f)
+		if (Seconds <= 0.0f)
+		{
+			continue;
+		}
+		// 화면은 사람에게만 하얗게(봇은 화면이 없다). 어시스트 기록은 눈부신 적 모두(봇 포함).
+		if (ValorController)
 		{
 			ValorController->ClientFlashed(Seconds);
+		}
+		if (SourceState && OwnerTeam != EValorTeam::None && ValorTeams::GetTeamOf(*It) != OwnerTeam)
+		{
+			It->RecordUtilityContribution(SourceState, GetWorld()->GetTimeSeconds() + Seconds);
 		}
 	}
 }
@@ -107,6 +119,7 @@ void AValorReconPulse::BeginPlay()
 			&& ValorAbilityEffects::HasLineOfSight(GetWorld(), GetActorLocation(), **It, this))
 		{
 			It->RevealToTeam(OwnerTeam, RevealSeconds);
+			It->RecordUtilityContribution(GetInstigator() ? GetInstigator()->GetPlayerState<AValorPlayerState>() : nullptr, GetWorld()->GetTimeSeconds() + RevealSeconds);
 		}
 	}
 }
@@ -186,6 +199,12 @@ void AValorHealOverTime::Tick(float DeltaSeconds)
 	{
 		Destroy();
 		return;
+	}
+
+	// 회복 어시스트 기록(처음 한 번): 다른 사람이 걸어 준 회복만.
+	if (Elapsed <= 0.0f && GetInstigator() && GetInstigator() != Character)
+	{
+		Character->RecordHealFrom(GetInstigator()->GetPlayerState<AValorPlayerState>(), GetWorld()->GetTimeSeconds() + (DurationSeconds - Elapsed));
 	}
 
 	const float Step = FMath::Min(DeltaSeconds, DurationSeconds - Elapsed);

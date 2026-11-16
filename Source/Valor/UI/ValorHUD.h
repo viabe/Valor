@@ -178,6 +178,11 @@ private:
 	// 전투 피드백. 데이터는 로컬 컨트롤러(명중/피격/사망), GameState(킬피드), PlayerState(전적), 캐릭터(체력/실드)에서 읽기만 한다.
 	void DrawHitMarker(float CenterX, float CenterY, float UIScale);
 
+	// 점수판(Tab을 누르고 있는 동안, 경기 종료 단계에는 항상). 경기 모드는 내 팀 위·상대 팀 아래, 데스매치는 한 목록.
+	// 열: 이름(요원) / 궁극기 / 크레딧(아군만) / ACS / K / D / A. 전투 점수 순으로 정렬한다.
+	void DrawScoreboard(float CenterX, float CenterY, float UIScale);
+	bool ShouldShowScoreboard() const;
+
 	// 개발 표시: 피격 감속 중이면 크로스헤어 아래에 지금 속도 비율, ValorTagMe를 켰으면 위치 보정 횟수(클라 예측 확인용)도.
 	void DrawTagDebug(const AValorCharacter& Character, float CenterX, float CenterY, float UIScale);
 	void DrawDamageIndicators(float CenterX, float CenterY, float UIScale);

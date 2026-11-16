@@ -149,4 +149,39 @@ bool FValorAbilityRulesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 점수판·어시스트 규칙: 13.10 어시스트 조건, 섬광·정찰·회복 어시스트 시간, 전투 점수(처치·연속 처치·ACS).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FValorScoreRulesTest, "Valor.Match.Rules.Score", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FValorScoreRulesTest::RunTest(const FString& Parameters)
+{
+	// 최근 3초 피해: 1초에 20, 5초에 15 → 6초 처치 기준 15.
+	const TArray<ValorScoreRules::FDamageHit> Hits = { { 1.0, 20.0f }, { 5.0, 15.0f } };
+	TestEqual(TEXT("최근 3초 피해"), ValorScoreRules::SumRecentDamage(Hits, 6.0), 15.0f);
+
+	TestTrue(TEXT("언제든 50 이상 = 어시스트"), ValorScoreRules::QualifiesForDamageAssist(50.0f, 0.0f));
+	TestFalse(TEXT("49는 최근 피해 없으면 아님"), ValorScoreRules::QualifiesForDamageAssist(49.0f, 0.0f));
+	TestTrue(TEXT("3초 안에 10 넘게 = 어시스트"), ValorScoreRules::QualifiesForDamageAssist(20.0f, 11.0f));
+	TestFalse(TEXT("3초 안에 정확히 10은 아님(10 넘게)"), ValorScoreRules::QualifiesForDamageAssist(20.0f, 10.0f));
+
+	TestTrue(TEXT("섬광 중 처치"), ValorScoreRules::QualifiesForUtilityAssist(10.0, 9.5));
+	TestTrue(TEXT("섬광 끝나고 1초 안"), ValorScoreRules::QualifiesForUtilityAssist(10.0, 11.0));
+	TestFalse(TEXT("섬광 끝나고 1초 지남"), ValorScoreRules::QualifiesForUtilityAssist(10.0, 11.2));
+	TestFalse(TEXT("기록 없음"), ValorScoreRules::QualifiesForUtilityAssist(-1000.0, 5.0));
+	TestTrue(TEXT("회복 끝나고 10초 안"), ValorScoreRules::QualifiesForHealAssist(10.0, 19.9));
+	TestFalse(TEXT("회복 끝나고 10초 지남"), ValorScoreRules::QualifiesForHealAssist(10.0, 20.5));
+
+	// 처치 점수: 남은 적 5/4/3/2/1명 → 150/130/110/90/70.
+	TestEqual(TEXT("5명 중 첫 처치"), ValorScoreRules::ComputeKillScore(5), 150);
+	TestEqual(TEXT("4명"), ValorScoreRules::ComputeKillScore(4), 130);
+	TestEqual(TEXT("3명"), ValorScoreRules::ComputeKillScore(3), 110);
+	TestEqual(TEXT("2명"), ValorScoreRules::ComputeKillScore(2), 90);
+	TestEqual(TEXT("마지막 1명"), ValorScoreRules::ComputeKillScore(1), 70);
+	TestEqual(TEXT("5명보다 많아도 150"), ValorScoreRules::ComputeKillScore(7), 150);
+	TestEqual(TEXT("첫 처치는 추가 점수 없음"), ValorScoreRules::ComputeMultiKillBonus(1), 0);
+	TestEqual(TEXT("두 번째 처치 +50"), ValorScoreRules::ComputeMultiKillBonus(2), 50);
+	TestEqual(TEXT("세 번째 처치 +50"), ValorScoreRules::ComputeMultiKillBonus(3), 50);
+	TestEqual(TEXT("ACS = 합 / 라운드"), ValorScoreRules::ComputeAverageCombatScore(450, 3), 150);
+	TestEqual(TEXT("라운드 0이면 합"), ValorScoreRules::ComputeAverageCombatScore(90, 0), 90);
+	return true;
+}
+
 #endif

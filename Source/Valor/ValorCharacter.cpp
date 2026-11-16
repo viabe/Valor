@@ -25,6 +25,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "Player/ValorPlayerController.h"
+#include "Player/ValorPlayerState.h"
 #include "ValorGameMode.h"
 
 AValorCharacter::AValorCharacter(const FObjectInitializer& ObjectInitializer)
@@ -554,6 +555,18 @@ void AValorCharacter::HandleDamageApplied(const FValorDamageEvent& DamageEvent)
 
 	const float AppliedDamage = DamageEvent.Resolution.HealthDamage + DamageEvent.Resolution.ShieldDamage;
 
+	// 어시스트 기록 + 전투 점수(피해 1점당 1점). 적에게 준 실제 피해만(넘친 피해·자기 피해·아군 피해 제외). 사망 처리보다 먼저 해야
+	// 이번 피해로 죽은 경우에도 처치 처리가 이 기록을 본다.
+	if (const APawn* AttackerPawn = Cast<APawn>(DamageEvent.Instigator.Get()))
+	{
+		AValorPlayerState* AttackerState = AttackerPawn->GetPlayerState<AValorPlayerState>();
+		if (AttackerPawn != this && AttackerState && AppliedDamage > 0.0f && !ValorTeams::AreAllies(AttackerPawn, this))
+		{
+			RecordDamageContribution(AttackerState, AppliedDamage);
+			AttackerState->AddCombatScore(FMath::RoundToInt(AppliedDamage));
+		}
+	}
+
 	// 피격자 화면: 피해가 온 방향 표시(사수 눈 위치). 비신뢰 RPC — 한 번 빠져도 다음 피격에 다시 표시되는 연출이다.
 	if (AValorPlayerController* VictimController = Cast<AValorPlayerController>(GetController()))
 	{
@@ -955,4 +968,54 @@ void AValorCharacter::ApplyBulletTag(float Strength)
 	TagState = ValorTagging::AddHit(TagState, World->GetTimeSeconds(), Strength, MovementComponent->GetTaggingConfig());
 	// 소유 클라가 빨리 알수록 늦게 느려지는 시간이 짧다(서버 검증 허용 시간 안에 들어온다).
 	ForceNetUpdate();
+}
+
+FValorAssistContribution& AValorCharacter::FindOrAddContribution(AValorPlayerState* Player)
+{
+	for (FValorAssistContribution& Contribution : AssistContributions)
+	{
+		if (Contribution.Player.Get() == Player)
+		{
+			return Contribution;
+		}
+	}
+	FValorAssistContribution& Added = AssistContributions.AddDefaulted_GetRef();
+	Added.Player = Player;
+	return Added;
+}
+
+void AValorCharacter::RecordDamageContribution(AValorPlayerState* Attacker, float Damage)
+{
+	const UWorld* World = GetWorld();
+	if (!HasAuthority() || !Attacker || !World)
+	{
+		return;
+	}
+
+	const double Now = World->GetTimeSeconds();
+	FValorAssistContribution& Contribution = FindOrAddContribution(Attacker);
+	Contribution.TotalDamage += Damage;
+	Contribution.RecentHits.RemoveAll([Now](const ValorScoreRules::FDamageHit& Hit) { return Now - Hit.Time > ValorScoreRules::RecentAssistSeconds; });
+	Contribution.RecentHits.Add({ Now, Damage });
+}
+
+void AValorCharacter::RecordUtilityContribution(AValorPlayerState* Source, double EffectEndServerTime)
+{
+	if (!HasAuthority() || !Source || !IsAlive() || Source == GetPlayerState())
+	{
+		return;
+	}
+	FValorAssistContribution& Contribution = FindOrAddContribution(Source);
+	Contribution.UtilityEndTime = FMath::Max(Contribution.UtilityEndTime, EffectEndServerTime);
+}
+
+void AValorCharacter::RecordHealFrom(AValorPlayerState* Healer, double HealEndServerTime)
+{
+	// 자기 회복은 어시스트가 아니다(회복 어시스트는 아군을 회복시킨 사람의 것).
+	if (!HasAuthority() || !Healer || Healer == GetPlayerState())
+	{
+		return;
+	}
+	LastHealer = Healer;
+	LastHealEndTime = HealEndServerTime;
 }
