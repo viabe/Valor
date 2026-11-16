@@ -46,11 +46,10 @@ namespace
 		TEXT("1이면 서버가 확정한 명중을 크로스헤어 주변 X 표시로 보여 준다(몸 흰색 / 머리 노란색 / 처치 빨간색). 발로란트 기본 HUD에는 없는 개발용 표시."),
 		ECVF_Default);
 
-	// 무기 클래스 → 표시 이름(데이터 에셋의 DisplayName). 킬피드/사망 화면은 클래스만 받으므로 여기서 이름을 찾는다.
-	FString GetWeaponDisplayName(const TSubclassOf<AValorWeaponBase>& WeaponClass)
+	// 무기 클래스(총·칼) → 표시 이름. 킬피드/사망 화면은 클래스만 받으므로 여기서 이름을 찾는다.
+	FString GetWeaponDisplayName(const UClass* WeaponClass)
 	{
-		const AValorWeaponBase* WeaponDefaults = WeaponClass ? WeaponClass->GetDefaultObject<AValorWeaponBase>() : nullptr;
-		return WeaponDefaults ? WeaponDefaults->GetWeaponConfig().DisplayName.ToString() : FString();
+		return ValorWeaponDisplay::GetDisplayName(WeaponClass);
 	}
 
 	struct FCrosshairRect

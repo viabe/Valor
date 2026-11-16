@@ -1,5 +1,7 @@
 #include "ValorGameMode.h"
 
+#include "Weapons/ValorMeleeWeapon.h"
+
 #include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
 #include "AbilitySystem/ValorDamageTypes.h"
 #include "AbilitySystemComponent.h"
@@ -93,8 +95,9 @@ void AValorGameMode::HandleCharacterKilled(AValorCharacter* Victim, const FValor
 		KillerState->AddKill(bHeadshot);
 	}
 
-	// 2) 킬피드(모두에게). 무기는 처치에 쓰인 사수의 무기(피해 GE의 EffectCauser)다.
-	const AValorWeaponBase* KillerWeapon = Cast<AValorWeaponBase>(KillingEvent.DamageCauser.Get());
+	// 2) 킬피드(모두에게). 무기는 처치에 쓰인 사수의 총 또는 칼(피해 GE의 EffectCauser)이다. 스킬(화염 지대 등)은 무기 표시 없음.
+	const AActor* DamageCauser = KillingEvent.DamageCauser.Get();
+	const AActor* KillerWeapon = (Cast<AValorWeaponBase>(DamageCauser) || Cast<AValorMeleeWeapon>(DamageCauser)) ? DamageCauser : nullptr;
 
 	FValorKillFeedEntry Entry;
 	Entry.KillerName = (KillerState && !bSelfKill) ? KillerState->GetPlayerName() : FString();

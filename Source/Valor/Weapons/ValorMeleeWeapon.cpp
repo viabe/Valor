@@ -46,6 +46,62 @@ AValorMeleeWeapon::AValorMeleeWeapon()
 	Viewmodel.KickBackCm = 0.0f;
 	Viewmodel.KickPitchDegrees = 0.0f;
 	Viewmodel.KickYawDegrees = 0.0f;
+
+	// 휘두르기 화면 흔들림: 베기는 옆으로 살짝, 찌르기는 앞으로 묵직하게(아래로 숙였다 돌아온다).
+	PrimarySwingCameraKick.PitchDegrees = 0.4f;
+	PrimarySwingCameraKick.YawDegrees = 0.8f;
+	PrimarySwingCameraKick.PeakTimeSeconds = 0.06f;
+	AltSwingCameraKick.PitchDegrees = 1.2f;
+	AltSwingCameraKick.YawDegrees = 0.2f;
+	AltSwingCameraKick.PeakTimeSeconds = 0.08f;
+}
+
+float AValorMeleeWeapon::GetAttackDamage(bool bAlt, bool bBackstab) const
+{
+	if (bBackstab)
+	{
+		return bAlt ? BackAltDamage : BackDamage;
+	}
+	return bAlt ? FrontAltDamage : FrontDamage;
+}
+
+bool ValorMelee::IsBackstab(const FVector& AttackerLocation, const FVector& VictimLocation, const FVector& VictimForward, float MaxAngleDegrees)
+{
+	const FVector AttackDirection = (VictimLocation - AttackerLocation).GetSafeNormal2D();
+	const FVector Forward = VictimForward.GetSafeNormal2D();
+	if (AttackDirection.IsNearlyZero() || Forward.IsNearlyZero())
+	{
+		return false;
+	}
+	// 등 뒤에서 찌르면 공격 방향이 맞는 사람이 보는 방향과 같다.
+	return FVector::DotProduct(AttackDirection, Forward) >= FMath::Cos(FMath::DegreesToRadians(MaxAngleDegrees));
+}
+
+void ValorMelee::BuildProbeOffsets(const FVector& AimDirection, float Radius, TArray<FVector>& OutOffsets, TArray<int32>& OutRings)
+{
+	OutOffsets.Reset();
+	OutRings.Reset();
+	OutOffsets.Add(FVector::ZeroVector);
+	OutRings.Add(0);
+	if (Radius <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	FVector Right;
+	FVector Up;
+	AimDirection.GetSafeNormal().FindBestAxisVectors(Right, Up);
+	constexpr int32 RaysPerRing = 8;
+	for (int32 Ring = 1; Ring <= 2; ++Ring)
+	{
+		const float RingRadius = Radius * (static_cast<float>(Ring) / 2.0f);
+		for (int32 Index = 0; Index < RaysPerRing; ++Index)
+		{
+			const float Angle = (2.0f * PI * Index) / RaysPerRing;
+			OutOffsets.Add((Right * FMath::Cos(Angle) + Up * FMath::Sin(Angle)) * RingRadius);
+			OutRings.Add(Ring);
+		}
+	}
 }
 
 void AValorMeleeWeapon::PostInitializeComponents()

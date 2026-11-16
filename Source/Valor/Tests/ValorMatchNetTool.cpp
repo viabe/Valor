@@ -1,3 +1,4 @@
+#include "AbilitySystem/Attributes/ValorCombatAttributeSet.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/ValorCombatComponent.h"
 #include "Engine/Engine.h"
@@ -15,6 +16,7 @@
 #include "GameFramework/PlayerInput.h"
 #include "World/ValorSpike.h"
 #include "World/ValorSpikeSite.h"
+#include "Weapons/ValorMeleeWeapon.h"
 #include "Weapons/ValorWeaponBase.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -22,8 +24,8 @@
 // =====================================================================================================
 // 개발 도구: 경기 모드 네트워크 확인(리슨 서버 + 클라이언트 두 프로세스)
 // 1라운드: 두 사람이 서로 다른 팀·서로 다른 스폰에 서는지, 교전 중 한 팀이 전멸하면 라운드가 끝나는지(전멸 승), 처치 200 + 승리 3000 /
-// 패배 1900 보상이 맞는지 본다. 호스트가 구매 단계에 둘에게 밴달을 주고, 교전이 시작되면 클라를 호스트 정면 3m에 세운다.
-// 클라는 호스트 머리를 쏴 처치한다.
+// 패배 1900 보상이 맞는지 본다. 교전이 시작되면 호스트가 클라를 자기 정면 1.3m에 세운다.
+// 클라는 실제 3 키로 칼을 꺼내 앞 베기(50)를 하고, 맞은 호스트가 등을 돌리면 등 뒤 찌르기(150)로 처치한다(칼 예측·서버 검증·되감기·뒤치기).
 // 반응 시간: 클라가 요원 선택 단계에 요원을 고르고 확정하며, 구매 단계에 실드를 사고 되판다. 서버 RPC를 보낸 뒤 결과(PlayerState 복제)가
 // 클라에 보이기까지의 시간을 잰다(같은 PC라 거의 네트워크 틱 몇 번이어야 한다. 엔진 기본 PlayerState 주기 1초면 평균 0.5초).
 // 실행(호스트 먼저, 약 25초 뒤 클라):
@@ -141,22 +143,54 @@ namespace ValorMatchNetTool
 				{
 					bPlacedClient = true;
 					const FVector Forward = FRotator(0.0f, Me->GetActorRotation().Yaw, 0.0f).Vector();
-					Other->TeleportTo(Me->GetActorLocation() + (Forward * 300.0f), (-Forward).Rotation());
+					Other->TeleportTo(Me->GetActorLocation() + (Forward * 130.0f), (-Forward).Rotation());
 				}
 
-				// 클라: 호스트가 정면에 오면 머리를 겨눠 0.4초마다 한 발씩 쏜다.
-				if (!bHost && Other->IsAlive() && FVector::Dist(Me->GetActorLocation(), Other->GetActorLocation()) < 400.0f)
+				// 호스트: 앞 베기를 맞으면(체력 50 이하) 등을 돌린다 → 클라가 뒤치기를 한다.
+				if (bHost && !bTurnedAway && Me->IsAlive() && Me->GetCombatAttributeSet() && Me->GetCombatAttributeSet()->GetHealth() <= 50.0f)
 				{
+					bTurnedAway = true;
+					HealthAfterFirstHit = Me->GetCombatAttributeSet()->GetHealth();
+					Controller->SetControlRotation((Me->GetActorLocation() - Other->GetActorLocation()).GetSafeNormal2D().Rotation());
+				}
+
+				// 클라: 실제 3 키로 칼을 꺼내고, 호스트 가슴을 겨눠 앞이면 베기, 등 뒤면 찌르기.
+				if (bKnifeKeyDown)
+				{
+					Controller->InputKey(FInputKeyParams(EKeys::Three, IE_Released, 0.0, false));
+					bKnifeKeyDown = false;
+				}
+				UValorCombatComponent* MyCombat = Me->GetCombatComponent();
+				if (!bHost && Other->IsAlive() && MyCombat && FVector::Dist(Me->GetActorLocation(), Other->GetActorLocation()) < 250.0f)
+				{
+					if (!MyCombat->IsMeleeActive() && !bKnifeRequested)
+					{
+						bKnifeRequested = true;
+						Controller->InputKey(FInputKeyParams(EKeys::Three, IE_Pressed, 1.0, false));
+						bKnifeKeyDown = true;
+					}
+
 					FVector ViewLocation;
 					FRotator ViewRotation;
 					Me->GetActorEyesViewPoint(ViewLocation, ViewRotation);
-					const FVector HeadTarget = Other->GetMesh()->GetSocketLocation(TEXT("head")) + FVector(0.0f, 0.0f, 5.0f);
-					Controller->SetControlRotation((HeadTarget - ViewLocation).Rotation());
-					if (Now >= NextShotTime)
+					Controller->SetControlRotation(((Other->GetActorLocation() + FVector(0.0f, 0.0f, 30.0f)) - ViewLocation).Rotation());
+
+					if (MyCombat->IsMeleeActive() && MyCombat->IsEquipReady() && Now >= NextShotTime)
 					{
-						NextShotTime = Now + 0.4;
-						Me->HandleFireInputPressed();
-						Me->HandleFireInputReleased();
+						const bool bBehind = ValorMelee::IsBackstab(Me->GetActorLocation(), Other->GetActorLocation(), Other->GetActorForwardVector(), 60.0f);
+						if (bBehind)
+						{
+							MyCombat->HandleADSInputPressed();
+							MyCombat->HandleADSInputReleased();
+							bUsedBackstab = true;
+							NextShotTime = Now + 1.1;
+						}
+						else
+						{
+							Me->HandleFireInputPressed();
+							Me->HandleFireInputReleased();
+							NextShotTime = Now + 0.6;
+						}
 						++ShotsFired;
 					}
 				}
@@ -175,6 +209,19 @@ namespace ValorMatchNetTool
 					GameState->GetTeamScore(MyState->GetTeam()), GameState->GetTeamScore(OtherState->GetTeam()), MyState->GetCredits(), OtherState->GetCredits(), MyState->GetKills(), ShotsFired));
 				Expect(GameState->GetLastRoundEndReason() == EValorRoundEndReason::Elimination, TEXT("전멸로 라운드 종료"));
 				Expect(bIWon == !bHost, TEXT("클라 팀 승리(호스트 전멸)"));
+				const TArray<AValorGameState::FKillFeedRecord>& KillFeed = GameState->GetKillFeed();
+				const FString KillWeapon = KillFeed.Num() > 0 ? KillFeed.Last().WeaponDisplayName : FString();
+				Test->AddInfo(FString::Printf(TEXT("MATCHNET %s knife: killWeapon=%s swings=%d backstab=%d hostHealthAfterFirstHit=%.0f"),
+					bHost ? TEXT("Host") : TEXT("Client"), *KillWeapon, ShotsFired, bUsedBackstab ? 1 : 0, HealthAfterFirstHit));
+				Expect(KillWeapon == TEXT("Knife"), TEXT("칼로 처치(킬피드 Knife)"));
+				if (bHost)
+				{
+					Expect(HealthAfterFirstHit == 50.0f, TEXT("앞 베기 50(서버 판정)"));
+				}
+				else
+				{
+					Expect(bUsedBackstab && ShotsFired == 2, TEXT("앞 베기 한 번 + 등 뒤 찌르기 한 번으로 처치"));
+				}
 				// 승자: 시작 + 처치 200 + 승리 3000. 패자: 시작 + 1900. 시작은 권총이 없으면 가장 싼 총 값(지금 850).
 				bool bHasSidearms = false;
 				int32 Cheapest = 0;
@@ -376,6 +423,13 @@ namespace ValorMatchNetTool
 		double PlantPressTime = 0.0;
 		double DefuseCheckTime = -1.0;
 		int32 CreditsBeforePlant = 0;
+
+		// 칼(1라운드).
+		bool bKnifeRequested = false;
+		bool bKnifeKeyDown = false;
+		bool bUsedBackstab = false;
+		bool bTurnedAway = false;
+		float HealthAfterFirstHit = -1.0f;
 
 		// 반응 시간 측정(클라).
 		double AgentSelectSeenTime = -1.0;

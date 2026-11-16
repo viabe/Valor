@@ -40,6 +40,22 @@ struct FValorHitScanResult
 	TWeakObjectPtr<AActor> WorldBlockingActor;
 };
 
+// 근접 공격 판정 결과(서버 판정·사수 예측 공용, 복제하지 않음).
+struct FValorMeleeProbeResult
+{
+	AValorCharacter* Target = nullptr;
+	// 맞힌 광선의 고리 번호(0 = 조준 중심). 작을수록 조준 중심에 가깝다.
+	int32 Ring = INDEX_NONE;
+	float Distance = 0.0f;
+	FVector ImpactPoint = FVector::ZeroVector;
+	bool bBackstab = false;
+
+	// 조준 중심선이 사거리 안에서 닿은 월드 물체(스킬 벽 피해, 벽 베기 연출).
+	bool bHitWorld = false;
+	FVector WorldImpactPoint = FVector::ZeroVector;
+	TWeakObjectPtr<AActor> WorldBlockingActor;
+};
+
 /**
  * 전투 컴포넌트: 사격/재장전/ADS/줍기·교체의 입력 → 서버 요청 → 서버 판정 → 연출 흐름을 담당한다.
  *
@@ -63,6 +79,10 @@ struct FValorHitScanResult
  *  4) 서버는 요청을 검증(시각 범위, 연사 속도, 수신 속도 제한, 탄약, 조준 정합성)한 뒤 GAS 발사 어빌리티를 활성화하고,
  *     "자기 스프레이 상태"로 반동/탄퍼짐을 다시 계산해 랙 보상 히트스캔과 피해를 확정한다. 클라가 계산한 값은 쓰지 않는다.
  *  5) 다른 클라에게는 비신뢰 멀티캐스트로 연출만 보낸다(사수 본인은 이미 예측으로 재생했으므로 건너뜀).
+ *
+ * 칼 공격(좌클릭 베기 / 우클릭 찌르기): 총과 같은 길을 쓴다. 발사 요청(시각·조준·버튼) → GAS 발사 어빌리티 → 서버가 칼을 든 상태면
+ *  ExecuteServerMeleeAttack으로 간다. 판정은 조준선 둘레 여러 광선(칼 판정 굵기)을 발사 시각으로 되감은 판정 도형에 쏘고,
+ *  조준 중심에 가까운 광선에 맞은 대상 하나만 맞는다. 사수 클라는 같은 판정을 지금 자세로 해 연출만 먼저 보여 준다.
  *
  * 트레이드오프:
  *  - 서버는 클라가 주장한 발사 시각을 반동 회복 계산에 사용한다(결정성). 대신 범위/간격/실수신 속도를 검증해 조작 여지를 막는다.
@@ -201,6 +221,24 @@ public:
 	// 로컬 표시용: 카메라가 따라가야 할 반동 오프셋(= 반동 × 현재 모드의 CameraRecoilFollowRatio). 힙은 0, ADS는 반동 그대로.
 	FRotator GetCameraRecoilOffset() const;
 
+	// === 칼 공격 ===
+
+	// 지금 칼을 들고 있나(소유 클라는 교체 예측 반영).
+	bool IsMeleeActive() const;
+
+	// 애니메이션용: 이 머신에서 마지막으로 휘두른 시각(로컬 월드 시간), 우클릭 찌르기였는지, 좌클릭 연속 베기 번호(0~2).
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Melee")
+	float GetLastMeleeAttackWorldTime() const { return LastMeleeAttackWorldTime; }
+
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Melee")
+	bool WasLastMeleeAttackAlt() const { return bLastMeleeAttackAlt; }
+
+	UFUNCTION(BlueprintPure, Category="Valor|Combat|Melee")
+	int32 GetMeleeComboIndex() const { return MeleeComboIndex; }
+
+	// 이 머신의 사수 화면에 마지막으로 보인 칼 판정(테스트·디버그 확인용).
+	const FValorMeleeProbeResult& GetLastLocalMeleeProbe() const { return LastLocalMeleeProbe; }
+
 protected:
 	// === 인벤토리(서버 권위, 모두에게 복제) ===
 	// 다른 플레이어 화면에서도 든 총을 보여 주고 애니메이션 무기군을 고르려면 슬롯 무기와 장착 상태가 필요하다.
@@ -324,6 +362,10 @@ protected:
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastPlayReloadCue();
 
+	// 다른 클라용 칼 휘두르기 연출(3인칭 애니메이션 기준 시각). 연출이라 비신뢰.
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastSimulateMelee(bool bAlt, uint8 ComboIndex);
+
 	UFUNCTION()
 	void OnRep_PrimaryWeapon(AValorWeaponBase* PreviousWeapon);
 
@@ -357,6 +399,31 @@ private:
 
 	// 거부 사유를 기록한다. bSuspicious면 경고(연사 속도 위반 등 조작 의심), 아니면 상세 로그(탄창 끝 예측 초과 등 정상 상황).
 	void RejectShot(const TCHAR* Reason, bool bSuspicious);
+
+	// 조준은 입력이므로 받아들이되, 서버가 아는 시점과 너무 다르면 서버 시점으로 바꾼다(총·칼 공용).
+	FRotator SanitizeAimRotation(const FRotator& ClaimedAim) const;
+
+	// === 칼 공격 내부 ===
+
+	// 로컬 공격 루프(소유 클라/리슨 호스트): 버튼을 누르고 있는 동안 공격 간격마다 한 번씩 공격 요청을 만든다.
+	void TryLocalMeleeAttack();
+
+	// 원격 소유 클라: 지금 자세로 판정해 연출만 먼저 보여 준다(피해 없음, 명중 표시는 서버 확정으로 온다).
+	void PredictLocalMeleeAttack(const FValorShotRequest& Request);
+
+	// 서버: 검증 → 되감기 판정 → 피해(뒤치기 2배) 또는 스킬 벽 피해 → 연출.
+	void ExecuteServerMeleeAttack(FValorShotRequest Request);
+	bool ValidateMeleeRequest(FValorShotRequest& InOutRequest);
+
+	// 칼 판정: 눈에서 조준 방향으로 판정 굵기만큼 둘러싼 광선들. 서버는 공격 시각으로 되감고(bRewind), 예측은 지금 자세.
+	// 눈에서 맞은 점까지 벽이 없어야 하고, 조준 중심에 가까운 광선(고리 번호), 같으면 가까운 대상이 먼저다.
+	void PerformMeleeProbe(const FVector& EyeLocation, const FVector& AimDirection, bool bAlt, float AttackTime, bool bRewind, FValorMeleeProbeResult& OutResult) const;
+
+	// 좌클릭 연속 베기 번호를 다음으로 넘긴다(우클릭이나 쉬었다 치면 처음부터). 연출 전용이라 머신마다 따로 센다.
+	int32 AdvanceMeleeCombo(bool bAlt, double AttackTime);
+
+	// 로컬 사수 화면 연출(화면 흔들림, 1인칭 칼 움직임, 개발용 판정 표시).
+	void PlayLocalMeleePresentation(bool bAlt, int32 ComboIndex, const FValorMeleeProbeResult& Probe);
 
 	// 로컬 사수(예측 클라 또는 리슨 호스트)의 발사 연출.
 	void PlayLocalShotPresentation(const FValorShotEffects& ShotEffects);
@@ -442,7 +509,8 @@ private:
 	AValorWeaponPickup* FindPickupInView() const;
 
 	// 서버 전용: 한 대상에게 이번 발의 피해를 GAS 피해 GE로 적용한다(사수/무기/발사 위치/부위를 스펙에 싣는다).
-	void ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin);
+	// DamageCauser = 총 또는 칼 액터(킬피드 무기 이름).
+	void ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin, AActor* DamageCauser);
 
 	// 한 줄기 히트스캔: 벽은 월드 트레이스(캐릭터 무시), 캐릭터는 판정 상자(UValorLagCompensationComponent)로 본다.
 	// 서버(bRewindToShotTime = true)는 발사 시각으로 되감은 자세, 사수 클라의 예측(false)은 지금 보이는 자세로 판정한다.
@@ -517,4 +585,20 @@ private:
 	float LastFireSimulationWorldTime = -1000.0f;
 
 	FValorShotEffects LastLocalShotEffects;
+
+	// 칼: 로컬 공격 루프(마지막 공격 시각과 그 공격이 정한 다음 공격까지 간격).
+	double LastLocalMeleeTime = -1000.0;
+	double LocalMeleeCooldown = 0.0;
+
+	// 칼: 서버 검증(마지막 승인 공격 시각·간격).
+	double LastAcceptedMeleeTime = -1000.0;
+	double AcceptedMeleeCooldown = 0.0;
+
+	// 칼: 연출 상태(머신별).
+	int32 MeleeComboIndex = 0;
+	double LastMeleeComboTime = -1000.0;
+	bool bLastMeleeComboAlt = false;
+	float LastMeleeAttackWorldTime = -1000.0f;
+	bool bLastMeleeAttackAlt = false;
+	FValorMeleeProbeResult LastLocalMeleeProbe;
 };

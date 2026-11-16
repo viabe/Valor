@@ -21,9 +21,9 @@ struct FValorKillFeedEntry
 	UPROPERTY()
 	FString VictimName;
 
-	// 처치 무기. 표시 이름은 클라가 클래스 CDO의 데이터 에셋에서 읽는다(FText 대신 NetGUID 하나).
+	// 처치 무기(총 또는 칼 클래스). 표시 이름은 클라가 클래스 CDO에서 읽는다(FText 대신 NetGUID 하나, ValorWeaponDisplay).
 	UPROPERTY()
-	TSubclassOf<AValorWeaponBase> WeaponClass;
+	TSubclassOf<AActor> WeaponClass;
 
 	UPROPERTY()
 	bool bHeadshot = false;

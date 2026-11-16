@@ -13,6 +13,7 @@
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "ValorCharacter.h"
+#include "Weapons/ValorMeleeWeapon.h"
 #include "Weapons/ValorSpraySimulation.h"
 
 namespace
@@ -817,4 +818,21 @@ void AValorWeaponBase::RefreshWeaponMeshAlignment()
 	// 소켓 정렬은 위치/회전만 보정하고, 무기 원본 스케일은 유지해야 메시가 사라지지 않는다.
 	WeaponMesh->SetRelativeLocationAndRotation(MeshRelativeLocation, MeshRelativeRotation);
 	WeaponMesh->SetRelativeScale3D(FVector::OneVector);
+}
+
+FString ValorWeaponDisplay::GetDisplayName(const UClass* WeaponClass)
+{
+	if (!WeaponClass)
+	{
+		return FString();
+	}
+	if (WeaponClass->IsChildOf(AValorWeaponBase::StaticClass()))
+	{
+		return WeaponClass->GetDefaultObject<AValorWeaponBase>()->GetWeaponConfig().DisplayName.ToString();
+	}
+	if (WeaponClass->IsChildOf(AValorMeleeWeapon::StaticClass()))
+	{
+		return WeaponClass->GetDefaultObject<AValorMeleeWeapon>()->GetDisplayName().ToString();
+	}
+	return FString();
 }

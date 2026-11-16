@@ -28,6 +28,12 @@ class UValorWeaponDataAsset;
  * 트레이드오프: 소유 클라가 시드를 알기 때문에 "탄퍼짐 예측 핵"이 이론상 가능하다. 발로란트도 클라 예측과 서버 판정의
  *   일치를 택했고(넷코드 블로그), 이는 안티치트(Vanguard) 영역으로 분리한다.
  */
+// 무기 클래스(총 AValorWeaponBase 또는 칼 AValorMeleeWeapon) → 표시 이름(킬피드·사망 화면). 무기가 아니면 빈 문자열.
+namespace ValorWeaponDisplay
+{
+	VALOR_API FString GetDisplayName(const UClass* WeaponClass);
+}
+
 UCLASS()
 class VALOR_API AValorWeaponBase : public AActor
 {

@@ -37,9 +37,9 @@ struct FValorDeathInfo
 	UPROPERTY()
 	FString KillerName;
 
-	// 처치 무기 클래스. 이름(FText) 대신 클래스 참조를 보내 NetGUID 하나로 끝내고, 클라가 CDO의 데이터 에셋에서 이름을 읽는다.
+	// 처치 무기 클래스(총 또는 칼). 이름(FText) 대신 클래스 참조를 보내 NetGUID 하나로 끝내고, 클라가 CDO에서 이름을 읽는다.
 	UPROPERTY()
-	TSubclassOf<AValorWeaponBase> WeaponClass;
+	TSubclassOf<AActor> WeaponClass;
 
 	UPROPERTY()
 	bool bHeadshot = false;

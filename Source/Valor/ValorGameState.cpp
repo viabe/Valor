@@ -219,10 +219,7 @@ void AValorGameState::MulticastAddKillFeedEntry_Implementation(const FValorKillF
 
 	FKillFeedRecord& Record = KillFeed.AddDefaulted_GetRef();
 	Record.Entry = Entry;
-	if (const AValorWeaponBase* WeaponDefaults = Entry.WeaponClass ? Entry.WeaponClass->GetDefaultObject<AValorWeaponBase>() : nullptr)
-	{
-		Record.WeaponDisplayName = WeaponDefaults->GetWeaponConfig().DisplayName.ToString();
-	}
+	Record.WeaponDisplayName = ValorWeaponDisplay::GetDisplayName(Entry.WeaponClass);
 
 	const UWorld* World = GetWorld();
 	Record.LocalTime = World ? World->GetTimeSeconds() : 0.0;

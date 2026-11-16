@@ -12,6 +12,7 @@
 #include "Components/ValorViewmodelComponent.h"
 #include "Components/ValorCharacterMovementComponent.h"
 #include "Components/ValorLagCompensationComponent.h"
+#include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -38,6 +39,13 @@ namespace
 
 	// "장착 시간 없이 바로 쓸 수 있음"을 나타내는 장착 시작 시각(스폰 지급).
 	constexpr float InstantEquipStartTime = -1000.0f;
+
+	// 칼 휘두르기 애니메이션이 아직 없어서, 개발 빌드에서는 판정 범위와 맞은 점을 잠깐 그려 휘두른 것을 보여 준다.
+	TAutoConsoleVariable<int32> CVarValorDrawMeleeDebug(
+		TEXT("Valor.Debug.DrawMelee"),
+		1,
+		TEXT("1이면 칼을 휘두를 때 판정 범위(원)와 맞은 점을 0.4초 동안 그린다(내 화면만). 0이면 끈다."),
+		ECVF_Default);
 }
 
 UValorCombatComponent::UValorCombatComponent()
@@ -160,6 +168,13 @@ void UValorCombatComponent::HandleADSInputPressed()
 	bLocalADSButtonHeld = true;
 	if (!EquippedWeapon)
 	{
+		// 칼: 우클릭은 조준이 아니라 찌르기다.
+		if (IsMeleeActive())
+		{
+			bLocalAltFireHeld = true;
+			bLocalFiringAltAttack = true;
+			TryLocalMeleeAttack();
+		}
 		return;
 	}
 
@@ -334,6 +349,13 @@ void UValorCombatComponent::TryFireLocalShot()
 	UWorld* World = GetWorld();
 	if (!World || !OwnerCharacter || !GetOwner())
 	{
+		return;
+	}
+
+	// 칼을 들었으면 칼 공격 루프로 간다(총 발사 규칙: 탄약·반동·점사는 칼에 없다).
+	if (!EquippedWeapon && IsMeleeActive())
+	{
+		TryLocalMeleeAttack();
 		return;
 	}
 
@@ -563,8 +585,19 @@ void UValorCombatComponent::TraceShot(const FValorShotRequest& Request, const FV
 
 void UValorCombatComponent::ExecuteServerFireAbility()
 {
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !OwnerCharacter || !EquippedWeapon || bIsReloading || !bHasPendingShotRequest)
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !OwnerCharacter || bIsReloading || !bHasPendingShotRequest)
 	{
+		return;
+	}
+
+	// 칼을 든 상태의 공격 요청: 같은 어빌리티 경로(사망 태그 차단 등 GAS 규칙)를 지나 칼 판정으로 간다.
+	if (!EquippedWeapon)
+	{
+		if (IsMeleeActive())
+		{
+			bHasPendingShotRequest = false;
+			ExecuteServerMeleeAttack(PendingShotRequest);
+		}
 		return;
 	}
 
@@ -635,7 +668,7 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 
 	for (const TPair<AValorCharacter*, FValorPendingTargetDamage>& TargetDamage : DamageByTarget)
 	{
-		ApplyDamageToTarget(TargetDamage.Key, TargetDamage.Value, TraceStart);
+		ApplyDamageToTarget(TargetDamage.Key, TargetDamage.Value, TraceStart, EquippedWeapon);
 	}
 
 	// 연출: 로컬 사수가 곧 서버인 리슨 호스트는 여기서 바로 재생하고, 나머지 클라는 멀티캐스트로 받는다.
@@ -653,10 +686,10 @@ void UValorCombatComponent::ExecuteServerFireAbility()
 	}
 }
 
-void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin)
+void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const FValorPendingTargetDamage& PendingDamage, const FVector& ShotOrigin, AActor* DamageCauser)
 {
 	// 아군 피해는 판정 단계에서 이미 빠지지만, 피해를 실제로 주는 마지막 관문에서도 막는다.
-	if (!Target || !Target->IsAlive() || !AbilitySystemComponent || !EquippedWeapon || PendingDamage.Damage <= 0.0f || ValorTeams::AreAllies(OwnerCharacter, Target))
+	if (!Target || !Target->IsAlive() || !AbilitySystemComponent || !DamageCauser || PendingDamage.Damage <= 0.0f || ValorTeams::AreAllies(OwnerCharacter, Target))
 	{
 		return;
 	}
@@ -670,8 +703,8 @@ void UValorCombatComponent::ApplyDamageToTarget(AValorCharacter* Target, const F
 	// 피해는 사수의 ASC가 만든 GE 스펙으로 보낸다 → 대상 AttributeSet이 "누가(사수), 무엇으로(무기), 어디서(발사 위치)"를 안다.
 	// Instigator = 사수 캐릭터, EffectCauser = 무기 액터(킬피드 무기 이름), Origin = 사수 눈 위치(피격 방향 표시).
 	FGameplayEffectContextHandle Context = AbilitySystemComponent->MakeEffectContext();
-	Context.AddInstigator(OwnerCharacter, EquippedWeapon);
-	Context.AddSourceObject(EquippedWeapon);
+	Context.AddInstigator(OwnerCharacter, DamageCauser);
+	Context.AddSourceObject(DamageCauser);
 	Context.AddOrigin(ShotOrigin);
 
 	const FGameplayEffectSpecHandle SpecHandle = AbilitySystemComponent->MakeOutgoingSpec(UValorDamageGameplayEffect::StaticClass(), 1.0f, Context);
@@ -770,9 +803,19 @@ bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
 	}
 
 	// (5) 조준 정합성: 조준은 입력이므로 받아들이되, 서버가 아는 시점과 비정상적으로 다르면 서버 시점으로 대체한다.
-	FRotator AimRotation = InOutRequest.AimRotation.GetNormalized();
+	InOutRequest.AimRotation = SanitizeAimRotation(InOutRequest.AimRotation);
+	return true;
+}
+
+FRotator UValorCombatComponent::SanitizeAimRotation(const FRotator& ClaimedAim) const
+{
+	FRotator AimRotation = ClaimedAim.GetNormalized();
 	AimRotation.Pitch = FMath::Clamp(AimRotation.Pitch, -89.9, 89.9);
 	AimRotation.Roll = 0.0;
+	if (!OwnerCharacter)
+	{
+		return AimRotation;
+	}
 
 	const FRotator ServerViewRotation = OwnerCharacter->GetViewRotation();
 	const double AimDot = FMath::Clamp(FVector::DotProduct(AimRotation.Vector(), ServerViewRotation.Vector()), -1.0, 1.0);
@@ -780,11 +823,9 @@ bool UValorCombatComponent::ValidateShotRequest(FValorShotRequest& InOutRequest)
 	if (AimDivergenceDegrees > MaxAimDivergenceDegrees)
 	{
 		UE_LOG(LogValorCombat, Warning, TEXT("[발사 검증] %s 조준 불일치 %.1f도 → 서버 시점으로 대체"), *GetNameSafe(OwnerCharacter), AimDivergenceDegrees);
-		AimRotation = ServerViewRotation;
+		return ServerViewRotation;
 	}
-
-	InOutRequest.AimRotation = AimRotation;
-	return true;
+	return AimRotation;
 }
 
 void UValorCombatComponent::RejectShot(const TCHAR* Reason, bool bSuspicious)
@@ -1374,7 +1415,7 @@ void UValorCombatComponent::HandleActiveEquipmentChanged(AValorWeaponBase* Previ
 		LocalZoomLevel = 0;
 
 		// 방아쇠를 누른 채 바꿨다면 새 총은 장착이 끝나는 순간부터 쏜다(TryFireLocalShot이 장착 완료 시각으로 예약한다).
-		if (bLocalFireHeld && EquippedWeapon && OwnerCharacter->IsAlive())
+		if (bLocalFireHeld && (EquippedWeapon || IsMeleeActive()) && OwnerCharacter->IsAlive())
 		{
 			TryFireLocalShot();
 		}
@@ -1911,4 +1952,389 @@ void UValorCombatComponent::PerformHitScan(const FVector& TraceStart, const FVec
 	OutResult.TravelDistance = BestDistance;
 	OutResult.bBlockingHit = true;
 	OutResult.bPenetratedSurface = bBestPenetrated;
+}
+
+// =====================================================================================================
+// 칼 공격
+// =====================================================================================================
+
+bool UValorCombatComponent::IsMeleeActive() const
+{
+	return MeleeWeapon != nullptr && GetActiveSlot() == EValorWeaponSlot::Melee;
+}
+
+void UValorCombatComponent::TryLocalMeleeAttack()
+{
+	UWorld* World = GetWorld();
+	if (!World || !OwnerCharacter || !GetOwner())
+	{
+		return;
+	}
+
+	World->GetTimerManager().ClearTimer(LocalFireTimerHandle);
+
+	// 총과 같은 차단 조건(사망, 경기 단계, 스파이크 사용 중). 서버도 같은 값으로 거부한다.
+	if (!OwnerCharacter->IsAlive() || !IsFireAllowedByMatch() || AValorSpike::IsCharacterUsingSpike(*OwnerCharacter) || !IsMeleeActive())
+	{
+		bFireShotBuffered = false;
+		return;
+	}
+
+	// 우클릭을 뗐는데 좌클릭은 누르고 있으면 다시 베기로 돌아간다.
+	const bool bBuffered = bFireShotBuffered;
+	bFireShotBuffered = false;
+	bool bAlt = bLocalFiringAltAttack;
+	if (bAlt && !bLocalAltFireHeld && !bBuffered && bLocalFireHeld)
+	{
+		bAlt = false;
+		bLocalFiringAltAttack = false;
+	}
+	const bool bHeld = bAlt ? bLocalAltFireHeld : bLocalFireHeld;
+	if (!bHeld && !bBuffered)
+	{
+		return;
+	}
+
+	const double Now = GetSynchronizedTime();
+
+	// 칼을 꺼내는 중: 누르고 있으면 다 꺼낸 순간 친다(총과 같은 규칙. 짧은 탭은 장착 뒤 저절로 나가지 않게 버퍼하지 않는다).
+	const double EquipReadyTime = GetEquipReadyTime();
+	if (Now + KINDA_SMALL_NUMBER < EquipReadyTime)
+	{
+		if (bHeld)
+		{
+			World->GetTimerManager().SetTimer(LocalFireTimerHandle, this, &UValorCombatComponent::TryLocalMeleeAttack, static_cast<float>(EquipReadyTime - Now), false);
+		}
+		return;
+	}
+
+	// 직전 공격이 정한 간격(우클릭 찌르기 뒤에는 회복이 길다). 너무 빨리 누른 입력은 가장 이른 시각으로 예약한다(탭 버퍼).
+	const double EarliestAttackTime = LastLocalMeleeTime + LocalMeleeCooldown;
+	if (Now + KINDA_SMALL_NUMBER < EarliestAttackTime)
+	{
+		bFireShotBuffered = true;
+		World->GetTimerManager().SetTimer(LocalFireTimerHandle, this, &UValorCombatComponent::TryLocalMeleeAttack, static_cast<float>(EarliestAttackTime - Now), false);
+		return;
+	}
+
+	const double AttackTime = (Now - EarliestAttackTime) <= MaxScheduleSlackSeconds ? EarliestAttackTime : Now;
+
+	FValorShotRequest Request;
+	Request.ClientShotTime = static_cast<float>(AttackTime);
+	Request.AimRotation = OwnerCharacter->GetViewRotation();
+	Request.bAltFire = bAlt;
+	Request.Quantize();
+	LastLocalMeleeTime = Request.ClientShotTime;
+	LocalMeleeCooldown = MeleeWeapon->GetAttackInterval(bAlt);
+
+	if (GetOwner()->HasAuthority())
+	{
+		// 리슨 호스트: 권위 경로가 판정과 연출을 같이 한다.
+		SubmitShotToFireAbility(Request);
+	}
+	else
+	{
+		PredictLocalMeleeAttack(Request);
+		ServerFireShot(Request);
+	}
+
+	// 누르고 있으면 다음 공격을 이상적인 간격으로 예약한다(발로란트: 누르고 있으면 계속 벤다).
+	if (bHeld && IsMeleeActive())
+	{
+		const double NextAttackTime = Request.ClientShotTime + LocalMeleeCooldown;
+		const float Delay = FMath::Max(0.001f, static_cast<float>(NextAttackTime - GetSynchronizedTime()));
+		World->GetTimerManager().SetTimer(LocalFireTimerHandle, this, &UValorCombatComponent::TryLocalMeleeAttack, Delay, false);
+	}
+}
+
+void UValorCombatComponent::PredictLocalMeleeAttack(const FValorShotRequest& Request)
+{
+	if (!OwnerCharacter || !MeleeWeapon)
+	{
+		return;
+	}
+
+	FVector EyeLocation = FVector::ZeroVector;
+	FRotator IgnoredViewRotation = FRotator::ZeroRotator;
+	OwnerCharacter->GetWeaponViewPoint(EyeLocation, IgnoredViewRotation);
+
+	FValorMeleeProbeResult Probe;
+	PerformMeleeProbe(EyeLocation, Request.AimRotation.Vector(), Request.bAltFire, 0.0f, false, Probe);
+	const int32 ComboIndex = AdvanceMeleeCombo(Request.bAltFire, Request.ClientShotTime);
+	PlayLocalMeleePresentation(Request.bAltFire, ComboIndex, Probe);
+}
+
+bool UValorCombatComponent::ValidateMeleeRequest(FValorShotRequest& InOutRequest)
+{
+	UWorld* World = GetWorld();
+	if (!World || !OwnerCharacter || !MeleeWeapon)
+	{
+		return false;
+	}
+
+	if (!IsMeleeActive())
+	{
+		RejectShot(TEXT("칼을 들지 않은 근접 공격"), false);
+		return false;
+	}
+	if (!IsFireAllowedByMatch())
+	{
+		RejectShot(TEXT("경기 단계상 공격 불가"), false);
+		return false;
+	}
+	if (AValorSpike::IsCharacterUsingSpike(*OwnerCharacter))
+	{
+		RejectShot(TEXT("스파이크 사용 중"), false);
+		return false;
+	}
+
+	// 공격 시각: 총과 같은 되감기 한도. 범위 밖이면 끌어오되 직전 승인 공격 + 간격보다 앞서지 않게 한다.
+	const double ServerNow = World->GetTimeSeconds();
+	const double MinAttackTime = ServerNow - MaxShotRewindSeconds;
+	const double MaxAttackTime = ServerNow + MaxShotTimeLeadSeconds;
+	if (InOutRequest.ClientShotTime < MinAttackTime || InOutRequest.ClientShotTime > MaxAttackTime)
+	{
+		const double ClampedTime = FMath::Clamp<double>(InOutRequest.ClientShotTime, MinAttackTime, ServerNow);
+		InOutRequest.ClientShotTime = static_cast<float>(FMath::Max(ClampedTime, LastAcceptedMeleeTime + AcceptedMeleeCooldown));
+	}
+	else if (InOutRequest.ClientShotTime + KINDA_SMALL_NUMBER < LastAcceptedMeleeTime + (AcceptedMeleeCooldown * FireIntervalTolerance))
+	{
+		// 주장 시각 간격이 직전 공격이 정한 간격보다 짧다. 시각 범위가 되감기 한도로 묶여 있어서, 시각을 벌려 주장해도
+		// 실제 초당 공격 수는 늘지 않는다(그래서 총처럼 따로 수신 속도 제한을 두지 않는다).
+		RejectShot(TEXT("근접 공격 간격 위반"), true);
+		return false;
+	}
+
+	if (static_cast<double>(InOutRequest.ClientShotTime) + EquipReadyToleranceSeconds < GetEquipReadyTime())
+	{
+		RejectShot(TEXT("칼 장착 완료 전 공격"), false);
+		return false;
+	}
+
+	InOutRequest.AimRotation = SanitizeAimRotation(InOutRequest.AimRotation);
+	return true;
+}
+
+void UValorCombatComponent::ExecuteServerMeleeAttack(FValorShotRequest Request)
+{
+	if (!OwnerCharacter || !MeleeWeapon || !ValidateMeleeRequest(Request))
+	{
+		return;
+	}
+
+	const bool bAlt = Request.bAltFire;
+	LastAcceptedMeleeTime = Request.ClientShotTime;
+	AcceptedMeleeCooldown = MeleeWeapon->GetAttackInterval(bAlt);
+
+	FVector EyeLocation = FVector::ZeroVector;
+	FRotator IgnoredViewRotation = FRotator::ZeroRotator;
+	OwnerCharacter->GetWeaponViewPoint(EyeLocation, IgnoredViewRotation);
+
+	FValorMeleeProbeResult Probe;
+	PerformMeleeProbe(EyeLocation, Request.AimRotation.Vector(), bAlt, Request.ClientShotTime, true, Probe);
+
+	if (Probe.Target)
+	{
+		// 칼은 부위 배율이 없다(머리를 쳐도 같은 피해, 헤드샷 표시 없음). 뒤치기만 2배.
+		FValorPendingTargetDamage Pending;
+		Pending.Damage = MeleeWeapon->GetAttackDamage(bAlt, Probe.bBackstab);
+		Pending.HitZone = EValorHitZone::Body;
+		ApplyDamageToTarget(Probe.Target, Pending, EyeLocation, MeleeWeapon);
+	}
+	else if (AValorAbilityWall* Wall = Cast<AValorAbilityWall>(Probe.WorldBlockingActor.Get()))
+	{
+		// 부술 수 있는 물체는 2배(위키 0.47).
+		Wall->ApplyWallDamage(MeleeWeapon->GetAttackDamage(bAlt, false) * MeleeWeapon->GetDestructibleDamageMultiplier());
+	}
+
+	UE_LOG(LogValorCombat, Verbose, TEXT("[칼] %s %s: 대상 %s 고리 %d 뒤치기 %d"), *GetNameSafe(OwnerCharacter), bAlt ? TEXT("찌르기") : TEXT("베기"),
+		*GetNameSafe(Probe.Target), Probe.Ring, Probe.bBackstab ? 1 : 0);
+
+	const int32 ComboIndex = AdvanceMeleeCombo(bAlt, Request.ClientShotTime);
+	if (OwnerCharacter->IsLocallyControlled())
+	{
+		PlayLocalMeleePresentation(bAlt, ComboIndex, Probe);
+	}
+	MulticastSimulateMelee(bAlt, static_cast<uint8>(ComboIndex));
+}
+
+void UValorCombatComponent::PerformMeleeProbe(const FVector& EyeLocation, const FVector& AimDirection, bool bAlt, float AttackTime, bool bRewind, FValorMeleeProbeResult& OutResult) const
+{
+	OutResult = FValorMeleeProbeResult();
+
+	UWorld* World = GetWorld();
+	if (!World || !OwnerCharacter || !MeleeWeapon)
+	{
+		return;
+	}
+
+	const FVector Direction = AimDirection.GetSafeNormal();
+	const float Range = MeleeWeapon->GetAttackRange(bAlt);
+
+	// 벽은 월드 트레이스(캐릭터 무시), 캐릭터는 판정 도형으로 본다(총 히트스캔과 같은 나눔).
+	FCollisionQueryParams WorldTraceParams(SCENE_QUERY_STAT(ValorMeleeWorldTrace), false, OwnerCharacter);
+	for (TActorIterator<AValorCharacter> It(World); It; ++It)
+	{
+		WorldTraceParams.AddIgnoredActor(*It);
+	}
+
+	FHitResult WorldHit;
+	if (World->LineTraceSingleByChannel(WorldHit, EyeLocation, EyeLocation + (Direction * Range), ECC_Visibility, WorldTraceParams))
+	{
+		OutResult.bHitWorld = true;
+		OutResult.WorldImpactPoint = WorldHit.ImpactPoint;
+		OutResult.WorldBlockingActor = WorldHit.GetActor();
+	}
+
+	TArray<FVector> Offsets;
+	TArray<int32> Rings;
+	ValorMelee::BuildProbeOffsets(Direction, MeleeWeapon->GetAttackRadius(bAlt), Offsets, Rings);
+
+	// 대상 후보를 빨리 거른다: 판정 도형은 캐릭터 중심에서 이 거리(cm) 안에 있다.
+	constexpr float CandidateSlackCm = 150.0f;
+	const float CandidateRadius = Range + MeleeWeapon->GetAttackRadius(bAlt) + CandidateSlackCm;
+
+	for (TActorIterator<AValorCharacter> It(World); It; ++It)
+	{
+		AValorCharacter* Candidate = *It;
+		if (!Candidate || Candidate == OwnerCharacter || !Candidate->IsAlive() || ValorTeams::AreAllies(OwnerCharacter, Candidate)
+			|| FVector::DistSquared(Candidate->GetActorLocation(), EyeLocation) > FMath::Square(CandidateRadius))
+		{
+			continue;
+		}
+
+		const UValorLagCompensationComponent* LagCompComponent = Candidate->GetLagCompensationComponent();
+		if (!LagCompComponent)
+		{
+			continue;
+		}
+
+		for (int32 RayIndex = 0; RayIndex < Offsets.Num(); ++RayIndex)
+		{
+			// 광선은 고리 순서로 놓여 있다. 이미 더 안쪽 고리에서 찾은 대상이 있으면 바깥 고리는 볼 필요가 없다.
+			if (OutResult.Target && Rings[RayIndex] > OutResult.Ring)
+			{
+				break;
+			}
+
+			const FVector RayStart = EyeLocation + Offsets[RayIndex];
+			FValorLagCompHitResult Hit;
+			const bool bHit = bRewind
+				? LagCompComponent->ConfirmHitAtTime(RayStart, Direction, Range, AttackTime, Hit)
+				: LagCompComponent->ConfirmHitAtCurrentPose(RayStart, Direction, Range, Hit);
+			if (!bHit)
+			{
+				continue;
+			}
+
+			// 눈에서 맞은 점까지 벽이 있으면 안 된다(벽에 붙어 서서 옆 광선이 벽 너머를 찌르지 못하게).
+			if (World->LineTraceTestByChannel(EyeLocation, Hit.ImpactPoint, ECC_Visibility, WorldTraceParams))
+			{
+				continue;
+			}
+
+			const bool bBetter = !OutResult.Target || Rings[RayIndex] < OutResult.Ring
+				|| (Rings[RayIndex] == OutResult.Ring && Hit.HitDistance < OutResult.Distance);
+			if (bBetter)
+			{
+				OutResult.Target = Candidate;
+				OutResult.Ring = Rings[RayIndex];
+				OutResult.Distance = Hit.HitDistance;
+				OutResult.ImpactPoint = Hit.ImpactPoint;
+			}
+		}
+	}
+
+	// 뒤치기: 지금 위치·방향으로 본다. 트레이드오프: 되감은 기록에는 판정 도형 변환만 있어서, 0.25초 안에 몸을 돌린 경우는 지금 방향이 쓰인다.
+	if (OutResult.Target)
+	{
+		OutResult.bBackstab = ValorMelee::IsBackstab(OwnerCharacter->GetActorLocation(), OutResult.Target->GetActorLocation(),
+			OutResult.Target->GetActorForwardVector(), MeleeWeapon->GetBackstabMaxAngleDegrees());
+	}
+}
+
+int32 UValorCombatComponent::AdvanceMeleeCombo(bool bAlt, double AttackTime)
+{
+	const int32 ComboLength = MeleeWeapon ? FMath::Max(1, MeleeWeapon->GetPrimaryComboLength()) : 1;
+	const float ResetSeconds = MeleeWeapon ? MeleeWeapon->GetComboResetSeconds() : 1.0f;
+	if (bAlt || bLastMeleeComboAlt || AttackTime - LastMeleeComboTime > ResetSeconds)
+	{
+		MeleeComboIndex = 0;
+	}
+	else
+	{
+		MeleeComboIndex = (MeleeComboIndex + 1) % ComboLength;
+	}
+	bLastMeleeComboAlt = bAlt;
+	LastMeleeComboTime = AttackTime;
+	return MeleeComboIndex;
+}
+
+void UValorCombatComponent::PlayLocalMeleePresentation(bool bAlt, int32 ComboIndex, const FValorMeleeProbeResult& Probe)
+{
+	UWorld* World = GetWorld();
+	if (!World || !OwnerCharacter || !MeleeWeapon)
+	{
+		return;
+	}
+
+	LastMeleeAttackWorldTime = static_cast<float>(World->GetTimeSeconds());
+	bLastMeleeAttackAlt = bAlt;
+	MeleeComboIndex = ComboIndex;
+	LastLocalMeleeProbe = Probe;
+
+	if (UValorCameraComponent* CameraLogicComponent = OwnerCharacter->GetCameraLogicComponent())
+	{
+		CameraLogicComponent->AddFireKick(MeleeWeapon->GetSwingCameraKick(bAlt));
+	}
+
+	// 휘두르기 애니메이션 전 임시 손맛: 베기는 옆으로 휙, 찌르기는 앞으로 쑥.
+	if (UValorViewmodelComponent* ViewmodelComponent = OwnerCharacter->GetViewmodelComponent())
+	{
+		FValorViewmodelConfig SwingKick = MeleeWeapon->GetViewmodelConfig();
+		SwingKick.KickBackCm = bAlt ? -8.0f : 2.0f;
+		SwingKick.KickPitchDegrees = bAlt ? -3.0f : 4.0f;
+		SwingKick.KickYawDegrees = bAlt ? 0.0f : 10.0f;
+		ViewmodelComponent->AddFireKick(SwingKick, false);
+	}
+
+#if ENABLE_DRAW_DEBUG
+	if (CVarValorDrawMeleeDebug.GetValueOnGameThread() > 0)
+	{
+		FVector EyeLocation = FVector::ZeroVector;
+		FRotator IgnoredViewRotation = FRotator::ZeroRotator;
+		OwnerCharacter->GetWeaponViewPoint(EyeLocation, IgnoredViewRotation);
+		const FVector Direction = OwnerCharacter->GetViewRotation().Vector();
+		const float Range = MeleeWeapon->GetAttackRange(bAlt);
+		FVector Right;
+		FVector Up;
+		Direction.FindBestAxisVectors(Right, Up);
+		const FColor Color = Probe.Target ? FColor::Red : (Probe.bHitWorld ? FColor::White : FColor(160, 160, 160));
+		DrawDebugCircle(World, EyeLocation + (Direction * Range), MeleeWeapon->GetAttackRadius(bAlt), 24, Color, false, 0.4f, 0, 1.0f, Right, Up, false);
+		if (Probe.Target)
+		{
+			DrawDebugSphere(World, Probe.ImpactPoint, 6.0f, 8, Probe.bBackstab ? FColor::Orange : FColor::Red, false, 0.4f, 0, 1.5f);
+		}
+		else if (Probe.bHitWorld)
+		{
+			DrawDebugPoint(World, Probe.WorldImpactPoint, 10.0f, FColor::White, false, 0.4f);
+		}
+	}
+#endif
+}
+
+void UValorCombatComponent::MulticastSimulateMelee_Implementation(bool bAlt, uint8 ComboIndex)
+{
+	// 휘두른 본인(예측 클라 / 리슨 호스트)은 이미 재생했다.
+	if (!OwnerCharacter || GetNetMode() == NM_DedicatedServer || OwnerCharacter->IsLocallyControlled())
+	{
+		return;
+	}
+
+	if (const UWorld* World = GetWorld())
+	{
+		LastMeleeAttackWorldTime = static_cast<float>(World->GetTimeSeconds());
+	}
+	bLastMeleeAttackAlt = bAlt;
+	MeleeComboIndex = ComboIndex;
 }
