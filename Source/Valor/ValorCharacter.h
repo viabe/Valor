@@ -171,8 +171,8 @@ public:
 
 	void HandleFireInputPressed();
 
-	// 로컬 컨트롤러의 구매 메뉴가 열려 있나(열려 있으면 사격·조준 입력을 무시한다).
-	bool IsBuyMenuOpen() const;
+	// 로컬 컨트롤러의 구매 메뉴나 설정 창이 열려 있나(열려 있으면 사격·조준·스킬·관전 클릭을 무시한다).
+	bool IsMenuOpen() const;
 
 	// 요원 스킬 입력(C/Q/E/X). ASC에 스킬 칸 InputID로 넘긴다(부여할 때 같은 번호를 단다).
 	void HandleAbilityInput(uint8 Slot, bool bPressed);

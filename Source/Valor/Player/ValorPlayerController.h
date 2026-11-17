@@ -118,6 +118,19 @@ public:
 	// 요원 선택 창이 열려 있나(선택 단계 동안 자동으로 열리고 커서가 보인다).
 	bool IsAgentSelectOpen() const { return bAgentSelectOpen; }
 
+	// === 설정 창(로컬 화면) ===
+	// Esc(패키지·-game) 또는 F10(에디터 PIE는 Esc가 플레이를 끝내므로)으로 연다. 구매 메뉴가 열려 있으면 Esc는 그것부터 닫는다.
+	// 열려 있으면 커서가 보이고 시점·사격·스킬 입력이 멈춘다(이동은 된다). 언제든(요원 선택·관전 중에도) 열 수 있다.
+	void HandleMenuKey();
+	void SetSettingsOpen(bool bOpen);
+	bool IsSettingsOpen() const { return bSettingsOpen; }
+
+	// 사격·조준·스킬·관전 클릭을 막는 메뉴(구매·설정)가 열려 있나. 요원 선택 창은 캐릭터 입력과 따로 막힌다.
+	bool IsGameplayMenuOpen() const { return bBuyMenuOpen || bSettingsOpen; }
+
+	// 설정 창이 보고 있는 탭(0 = 조작, 1 = 조준선). HUD가 그리고 바꾼다.
+	int32 SettingsTab = 0;
+
 	// 스킬 충전 구매·되팔기(칸 번호 = EValorAbilitySlot).
 	UFUNCTION(Server, Reliable)
 	void ServerBuyAbility(uint8 Slot);
@@ -126,6 +139,33 @@ public:
 	void ServerSellAbility(uint8 Slot);
 
 	virtual void PlayerTick(float DeltaTime) override;
+
+	// 마우스 시점: 이번 프레임 마우스 원시 이동량(카운트) × 설정 감도로 직접 돌린다(아래 cpp 설명).
+	virtual void UpdateRotation(float DeltaTime) override;
+
+	// 지금 조준 감도 배율(조준 중이면 조준 감도 배율 × 줌 비율, 아니면 1). 도구·HUD 확인용.
+	float GetCurrentLookSensitivityScale() const;
+
+	// 콘솔 변수 Valor.Input.RawMouseLook(기본 1). 켜져 있으면 캐릭터는 마우스가 움직인 프레임에 IA_Look으로 시점을 돌리지 않는다.
+	static bool UsesRawMouseLook();
+
+	// 이번 프레임에 마우스 원시 이동량이 있나(IA_Look 값이 마우스에서 왔는지 게임패드에서 왔는지 가른다).
+	bool HasRawMouseMovementThisFrame() const;
+
+	// === 설정 콘솔 명령(정확한 숫자를 넣을 때). 바로 저장된다 ===
+	// ValorSens 0.4: 감도(발로란트와 같은 숫자). ValorScopedSens 1: 조준 감도 배율. ValorCrosshairColor 00FF00: 조준선 색.
+	// ValorSettings: 설정 창 열기·닫기.
+	UFUNCTION(Exec)
+	void ValorSens(float Sensitivity);
+
+	UFUNCTION(Exec)
+	void ValorScopedSens(float Multiplier);
+
+	UFUNCTION(Exec)
+	void ValorCrosshairColor(const FString& HexColor);
+
+	UFUNCTION(Exec)
+	void ValorSettings();
 
 	// === 개발용 콘솔 명령(경기 모드 테스트). 출시 빌드에서는 서버가 무시한다 ===
 	// ValorCredits 9000: 내 크레딧을 정한다.
@@ -240,8 +280,10 @@ private:
 
 	bool bBuyMenuOpen = false;
 	bool bAgentSelectOpen = false;
+	bool bSettingsOpen = false;
 
-	// 캔버스 HUD 클릭 영역용 커서 모드(구매 메뉴·요원 선택 창이 같이 쓴다).
+	// 캔버스 HUD 클릭 영역용 커서 모드(구매 메뉴·요원 선택 창·설정 창이 같이 쓴다). 하나라도 열려 있으면 커서를 켠다.
+	void RefreshCursorMode();
 	void ApplyCursorMode(bool bCursor);
 
 	double FlashStartTime = -1.0;

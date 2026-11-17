@@ -26,6 +26,7 @@
 | `ValorKillMe` | 내 캐릭터를 즉사시킨다(관전 확인용) |
 | `ValorTagMe [간격초\|off] [세기%]` | 서버가 일정 간격으로 내 캐릭터에 피격 감속을 건다(피해 없음, 기본 1.5초마다 72.5%). 크로스헤어 아래 `SLOWED`·`CORRECTIONS` 표시(Weapons.md 피격 감속) |
 | `Valor.HUD.TextScale 1.6` | HUD 글자·패널 배율(0이면 기본 1.4) |
+| `F10`(PIE) / `Esc` | 설정 창: 감도·조준 방식·조준선(Settings.md). 콘솔 `ValorSens 0.4` 등 |
 
 | 확인할 것 | 방법 |
 |---|---|

@@ -27,6 +27,7 @@
 #include "Weapons/ValorMeleeWeapon.h"
 #include "Weapons/ValorWeaponBase.h"
 #include "World/ValorWeaponPickup.h"
+#include "Settings/ValorUserSettings.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogValorCombat, Log, All);
 
@@ -208,7 +209,9 @@ void UValorCombatComponent::HandleADSInputPressed()
 
 bool UValorCombatComponent::UsesToggleZoom() const
 {
-	return EquippedWeapon && (EquippedWeapon->IsSniper() ? bToggleSniperZoom : bToggleADS);
+	// 조준 방식은 이 컴퓨터의 플레이어 설정이다(소유 클라에서만 불린다).
+	const FValorControlSettings& Controls = UValorUserSettings::Get().GetControls();
+	return EquippedWeapon && (EquippedWeapon->IsSniper() ? Controls.bToggleSniperZoom : Controls.bToggleADS);
 }
 
 void UValorCombatComponent::ExitToggledZoomForReload()
@@ -1589,13 +1592,25 @@ void UValorCombatComponent::HandleUnscopeAfterShot()
 		bLocalADSIntent = false;
 		RefreshADSOnLocalClient();
 
-		if (bAutoReScopeAfterShot)
+		if (UValorUserSettings::Get().GetControls().bAutoReScopeAfterShot)
 		{
 			PendingReScopeZoomLevel = ZoomLevelBeforeShot;
 			const float ReScopeDelay = FMath::Max(EquippedWeapon->GetNextShotCooldown(), 0.05f);
 			GetWorld()->GetTimerManager().SetTimer(ReScopeTimerHandle, this, &UValorCombatComponent::ReScopeAfterShot, ReScopeDelay, false);
 		}
 	}
+}
+
+float UValorCombatComponent::GetLocalZoomSensitivityRatio() const
+{
+	const UValorCameraComponent* CameraLogicComponent = OwnerCharacter ? OwnerCharacter->GetCameraLogicComponent() : nullptr;
+	if (!IsLocallyZoomed() || !CameraLogicComponent)
+	{
+		return 1.0f;
+	}
+	// 화면 FOV 보간 중간값이 아니라 목표 줌 FOV로 정한다(조준을 시작한 순간부터 같은 감도).
+	const float HipFieldOfView = CameraLogicComponent->GetHipFireFOV();
+	return ValorSettingsRules::ComputeZoomSensitivityRatio(HipFieldOfView, EquippedWeapon->GetZoomFieldOfView(HipFieldOfView, LocalZoomLevel));
 }
 
 void UValorCombatComponent::ReScopeAfterShot()

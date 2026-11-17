@@ -11,6 +11,24 @@
 #include "ValorMatchGameMode.h"
 #include "Weapons/ValorWeaponBase.h"
 #include "Sound/SoundBase.h"
+#include "Components/ValorCombatComponent.h"
+#include "GameFramework/PlayerInput.h"
+#include "HAL/IConsoleManager.h"
+#include "Settings/ValorUserSettings.h"
+
+namespace
+{
+	TAutoConsoleVariable<int32> CVarValorRawMouseLook(
+		TEXT("Valor.Input.RawMouseLook"),
+		1,
+		TEXT("1이면 마우스 원시 이동량(카운트) × 설정 감도로 시점을 돌린다(발로란트 감도 숫자와 같음). 0이면 예전 경로(입력 매핑 IA_Look 값 × 엔진 배율, 비교용)."),
+		ECVF_Default);
+}
+
+bool AValorPlayerController::UsesRawMouseLook()
+{
+	return CVarValorRawMouseLook.GetValueOnGameThread() > 0;
+}
 
 void AValorPlayerController::BeginPlay()
 {
@@ -104,6 +122,12 @@ void AValorPlayerController::SetBuyMenuOpen(bool bOpen)
 	// 구매 단계에 살아 있을 때만 연다(닫기는 언제나 된다).
 	if (bOpen)
 	{
+		// 설정 창 위에는 상점을 열지 않는다(설정 창을 닫고 연다).
+		if (bSettingsOpen)
+		{
+			return;
+		}
+
 		const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
 		const AValorCharacter* PossessedCharacter = Cast<AValorCharacter>(GetPawn());
 		if (!ValorGameState || !ValorGameState->IsBuyPhase() || !PossessedCharacter || !PossessedCharacter->IsAlive())
@@ -118,7 +142,123 @@ void AValorPlayerController::SetBuyMenuOpen(bool bOpen)
 	}
 
 	bBuyMenuOpen = bOpen;
-	ApplyCursorMode(bOpen || bAgentSelectOpen);
+	RefreshCursorMode();
+}
+
+void AValorPlayerController::HandleMenuKey()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	// 열린 것부터 닫는다(설정 창 → 상점). 아무것도 없으면 설정 창을 연다.
+	if (bSettingsOpen)
+	{
+		SetSettingsOpen(false);
+	}
+	else if (bBuyMenuOpen)
+	{
+		SetBuyMenuOpen(false);
+	}
+	else
+	{
+		SetSettingsOpen(true);
+	}
+}
+
+void AValorPlayerController::SetSettingsOpen(bool bOpen)
+{
+	if (!IsLocalController() || bSettingsOpen == bOpen)
+	{
+		return;
+	}
+
+	bSettingsOpen = bOpen;
+	if (!bOpen)
+	{
+		// 막대를 끄는 중에 닫혀도 마지막 값이 남도록 닫을 때 한 번 더 저장한다.
+		UValorUserSettings::Get().Save();
+	}
+	RefreshCursorMode();
+}
+
+void AValorPlayerController::RefreshCursorMode()
+{
+	ApplyCursorMode(bBuyMenuOpen || bAgentSelectOpen || bSettingsOpen);
+}
+
+void AValorPlayerController::UpdateRotation(float DeltaTime)
+{
+	// 왜 직접 돌리나: 입력 매핑(IMC_Player)의 IA_Look 값에는 에셋에 든 배율과 엔진 배율(2.5)이 곱해져
+	//   "감도 1 = 몇 도"를 코드에서 알 수 없다. 이번 프레임 마우스 원시 카운트를 읽어 발로란트와 같은 0.07도 × 감도로 돌리면
+	//   발로란트 감도를 그대로 옮겨 올 수 있고 프레임과도 무관하다. 회전 결과는 기존과 같이 이동 요청으로 서버에 간다.
+	// 메뉴가 열려 시점이 멈춘 동안(IsLookInputIgnored)은 돌리지 않는다.
+	if (IsLocalController() && PlayerInput && UsesRawMouseLook() && !IsLookInputIgnored())
+	{
+		// 한 축 키(MouseX/MouseY)의 원시 값은 X에 들어 있다. MouseY는 마우스를 앞으로 밀면 +.
+		const FVector2D Counts(PlayerInput->GetRawVectorKeyValue(EKeys::MouseX).X, PlayerInput->GetRawVectorKeyValue(EKeys::MouseY).X);
+		if (!Counts.IsZero())
+		{
+			const FValorControlSettings& Controls = UValorUserSettings::Get().GetControls();
+			const FVector2D Degrees = ValorSettingsRules::ComputeLookDegrees(Counts, Controls.MouseSensitivity, GetCurrentLookSensitivityScale(), Controls.bInvertMouse);
+			RotationInput.Yaw += Degrees.X;
+			RotationInput.Pitch += Degrees.Y;
+		}
+	}
+
+	Super::UpdateRotation(DeltaTime);
+}
+
+bool AValorPlayerController::HasRawMouseMovementThisFrame() const
+{
+	return PlayerInput && (PlayerInput->GetRawVectorKeyValue(EKeys::MouseX).X != 0.0 || PlayerInput->GetRawVectorKeyValue(EKeys::MouseY).X != 0.0);
+}
+
+float AValorPlayerController::GetCurrentLookSensitivityScale() const
+{
+	const AValorCharacter* PossessedCharacter = Cast<AValorCharacter>(GetPawn());
+	const UValorCombatComponent* CombatComponent = PossessedCharacter ? PossessedCharacter->GetCombatComponent() : nullptr;
+	if (!CombatComponent || !CombatComponent->IsLocallyZoomed())
+	{
+		return 1.0f;
+	}
+	return CombatComponent->GetLocalZoomSensitivityRatio() * UValorUserSettings::Get().GetControls().ScopedSensitivityMultiplier;
+}
+
+void AValorPlayerController::ValorSens(float Sensitivity)
+{
+	UValorUserSettings& Settings = UValorUserSettings::Get();
+	Settings.EditControls().MouseSensitivity = Sensitivity;
+	Settings.Save();
+	ClientMessage(FString::Printf(TEXT("Sensitivity %.3f"), Settings.GetControls().MouseSensitivity));
+}
+
+void AValorPlayerController::ValorScopedSens(float Multiplier)
+{
+	UValorUserSettings& Settings = UValorUserSettings::Get();
+	Settings.EditControls().ScopedSensitivityMultiplier = Multiplier;
+	Settings.Save();
+	ClientMessage(FString::Printf(TEXT("Scoped sensitivity multiplier %.3f"), Settings.GetControls().ScopedSensitivityMultiplier));
+}
+
+void AValorPlayerController::ValorCrosshairColor(const FString& HexColor)
+{
+	FColor Color;
+	if (!ValorSettingsRules::TryParseHexColor(HexColor, Color))
+	{
+		ClientMessage(TEXT("ValorCrosshairColor: 6자리 16진수로 넣어 주세요(예: 00FF00)."));
+		return;
+	}
+	UValorUserSettings& Settings = UValorUserSettings::Get();
+	Settings.EditCrosshair().Color = Color;
+	Settings.Save();
+	ClientMessage(FString::Printf(TEXT("Crosshair color %s"), *Color.ToHex().Left(6)));
+}
+
+void AValorPlayerController::ValorSettings()
+{
+	SetSettingsOpen(!bSettingsOpen);
 }
 
 void AValorPlayerController::ApplyCursorMode(bool bCursor)
@@ -189,7 +329,7 @@ void AValorPlayerController::PlayerTick(float DeltaTime)
 		if (bShouldOpen != bAgentSelectOpen)
 		{
 			bAgentSelectOpen = bShouldOpen;
-			ApplyCursorMode(bAgentSelectOpen || bBuyMenuOpen);
+			RefreshCursorMode();
 		}
 	}
 

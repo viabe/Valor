@@ -202,6 +202,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
 	int32 GetZoomLevel() const;
 
+	// 이 화면에서 조준(줌) 중인가(로컬 입력 기준, 서버 승인을 기다리지 않는다).
+	bool IsLocallyZoomed() const { return LocalZoomLevel > 0 && EquippedWeapon != nullptr; }
+
+	// 조준 감도용 줌 비율 = tan(줌 FOV/2) / tan(힙 FOV/2). 조준 중이 아니면 1. 밴달 0.8, 오퍼레이터 1단 0.4·2단 0.2.
+	float GetLocalZoomSensitivityRatio() const;
+
 	// 조준경 화면(저격총 조준 중)인지. true면 HUD가 조준경을 그리고 일반 크로스헤어/무기 UI를 숨기면 된다.
 	UFUNCTION(BlueprintPure, Category="Valor|Combat|UI")
 	bool IsScopeOverlayActive() const;
@@ -323,20 +329,9 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Pickup", meta=(ClampMin="10.0"))
 	float DropGroundSearchDepth = 400.0f;
 
-	// === 조준 입력 방식(발로란트 설정 메뉴의 항목들. 나중에 설정 UI/세이브 데이터로 옮길 값) ===
-	// 발로란트 기본값은 둘 다 토글이다: 우클릭 한 번으로 조준(불독·스팅어는 점사 모드)에 들어가고, 한 번 더 누르면 풀린다.
-
-	// 저격총 조준: true = 토글(기본). 우클릭할 때마다 1단 → 2단(오퍼레이터) → 해제. false = 누르고 있는 동안 1단.
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
-	bool bToggleSniperZoom = true;
-
-	// 그 외 총의 ADS: true = 토글(기본), false = 누르고 있는 동안만 조준.
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
-	bool bToggleADS = true;
-
-	// 쏘면 조준이 풀리는 저격총(오퍼레이터·마샬)을 장전이 끝나는 대로 다시 조준한다(발로란트 "자동 재조준" 설정).
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Combat|Aim")
-	bool bAutoReScopeAfterShot = false;
+	// 조준 입력 방식(토글/누르기, 저격 자동 재조준)은 플레이어 설정(UValorUserSettings::Controls)에서 읽는다.
+	//   저격총 토글: 우클릭할 때마다 1단 → 2단(오퍼레이터) → 해제. 누르기: 누르고 있는 동안 1단.
+	//   그 외 총 토글: 우클릭 한 번으로 조준(불독·스팅어는 점사 모드), 한 번 더 누르면 풀린다. 누르기: 누르는 동안만.
 
 	// 발사 요청 1발. 신뢰성 RPC로 보내 유실/순서 뒤바뀜이 없게 한다(유실되면 서버/클라 스프레이 진행도가 한 발 어긋남).
 	UFUNCTION(Server, Reliable)

@@ -6,6 +6,8 @@
 
 struct FValorShooterStance;
 struct FValorSprayEvaluation;
+struct FValorCrosshairSettings;
+struct FValorCrosshairLineSettings;
 class AValorCharacter;
 
 /**
@@ -16,7 +18,8 @@ class AValorCharacter;
  *   그래서 기본 크로스헤어 + 발로란트의 "Firing Error / Movement Error" 표시(탄퍼짐만큼 선이 벌어짐)를 그린다.
  * 구현: UMG 에셋 없이 AHUD 캔버스로 그려 C++만으로 동작한다(에셋 의존 0). 서버에는 HUD가 없으므로 비용이 없다.
  * 네트워크: 로컬 스프레이 상태(예측값)를 읽기만 한다. 서버 판정과 무관.
- * 트레이드오프: 캔버스 드로잉은 UMG보다 꾸미기 어렵다. 크로스헤어 커스터마이즈 UI가 필요해지면 UMG로 옮기면 된다.
+ * 조준선 모양과 설정 창(ValorHUDSettingsMenu.cpp)은 플레이어 설정(UValorUserSettings)을 읽고 쓴다.
+ * 트레이드오프: 캔버스 드로잉은 UMG보다 꾸미기 어렵다. 디자인 단계에서 설정 창·조준선 미리보기를 UMG로 옮기면 된다(설정 값 구조는 그대로).
  */
 UCLASS()
 class VALOR_API AValorHUD : public AHUD
@@ -30,54 +33,8 @@ public:
 	virtual void NotifyHitBoxClick(FName BoxName) override;
 
 protected:
-	// 아래 길이/두께/간격은 1080p 기준 픽셀이며 해상도에 비례해 확대된다(발로란트 기본 크로스헤어 근사값).
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair")
-	FLinearColor CrosshairColor = FLinearColor(1.0f, 1.0f, 1.0f, 1.0f);
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair")
-	bool bShowOutline = true;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair")
-	float OutlineThickness = 1.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair")
-	float OutlineOpacity = 0.5f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Inner")
-	float InnerLineLength = 6.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Inner")
-	float InnerLineThickness = 2.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Inner")
-	float InnerLineOffset = 3.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Inner")
-	float InnerLineOpacity = 0.8f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Inner")
-	bool bInnerShowFiringError = true;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Inner")
-	bool bInnerShowMovementError = false;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Outer")
-	float OuterLineLength = 2.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Outer")
-	float OuterLineThickness = 2.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Outer")
-	float OuterLineOffset = 10.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Outer")
-	float OuterLineOpacity = 0.35f;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Outer")
-	bool bOuterShowFiringError = true;
-
-	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair|Outer")
-	bool bOuterShowMovementError = true;
+	// 조준선 모양(색·외곽선·가운데 점·안쪽/바깥 선)은 플레이어 설정(UValorUserSettings::Crosshair)에서 읽는다.
+	// 길이/두께/간격은 1080p 기준 픽셀이며 해상도에 비례해 확대된다.
 
 	// 탄퍼짐(도)을 화면 픽셀로 바꾼 값에 곱하는 배율. 1이면 선이 실제 탄퍼짐 원뿔 가장자리에 맞는다.
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Crosshair")
@@ -171,7 +128,10 @@ protected:
 private:
 	// 조준경 화면: 머티리얼이 있으면 화면 전체에 그리고, 없으면 원형 마스크 + 조준선을 직접 그린다.
 	void DrawScopeOverlay(const class AValorWeaponBase& Weapon, float CenterX, float CenterY, float UIScale);
-	void DrawCrosshairLines(float CenterX, float CenterY, float Length, float Thickness, float Offset, float Opacity);
+	// 조준선(설정값) 한 벌: 안쪽·바깥 선 + 가운데 점. Scale = 1080p 대비 배율, 오차는 이미 화면 픽셀.
+	// 게임 화면과 설정 창 미리보기가 같은 함수를 쓴다(보이는 모양이 같도록).
+	void DrawCrosshair(const FValorCrosshairSettings& Crosshair, float CenterX, float CenterY, float Scale, float FiringErrorPixels, float MovementErrorPixels);
+	void DrawCrosshairLines(const FValorCrosshairSettings& Crosshair, const FValorCrosshairLineSettings& Lines, float CenterX, float CenterY, float Scale, float ExtraOffset);
 	void DrawRect2D(const FLinearColor& Color, float X, float Y, float Width, float Height, float Opacity);
 	void DrawRecoilDebug(float CenterX, float CenterY, float FocalLengthPixels, const FValorSprayEvaluation& Spray, const FValorShooterStance& Stance, const FRotator& AppliedViewOffset);
 
@@ -212,6 +172,17 @@ private:
 
 	// 요원 선택 창: 요원 카드(이름·스킬 네 칸), 팀원 선택 상황, LOCK IN 버튼.
 	void DrawAgentSelect(float CenterX, float UIScale);
+
+	// 설정 창(ValorHUDSettingsMenu.cpp): 조작 탭(감도·조준 방식) / 조준선 탭(미리보기·색·선). 바꾸면 바로 저장·적용된다.
+	// 클릭 영역 이름은 "Set_<항목>_<동작>"(예: Set_Sens_Plus, Set_InnerLength_Minus, Set_ADS_Off, Set_Color_3, Set_Tab_1).
+	void DrawSettingsMenu(float UIScale);
+	bool IsSettingsMenuOpen() const;
+	bool HandleSettingsHitBox(const FString& BoxName);
+	void UpdateActiveSettingsSlider(float MouseX);
+
+	// 끌고 있는 막대(왼쪽 버튼을 누르고 있는 동안). 막대 위치는 매 프레임 그릴 때 기록한다.
+	FName ActiveSettingsSlider;
+	TMap<FName, FVector2D> SettingsSliderSpans;
 	bool UsesRounds() const;
 
 	// 그림자 있는 텍스트. AlignX: 0 = 왼쪽 정렬, 0.5 = 가운데, 1 = 오른쪽. 그린 높이를 돌려준다(줄 쌓기용).

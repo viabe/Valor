@@ -25,6 +25,7 @@
 #include "World/ValorSpike.h"
 #include "AbilitySystem/ValorAgentTypes.h"
 #include "World/ValorSpikeSite.h"
+#include "Settings/ValorUserSettings.h"
 
 namespace
 {
@@ -100,6 +101,10 @@ void AValorHUD::DrawHUD()
 	FValorShooterStance Stance;
 	const bool bHasWeapon = !bLocalDead && CombatComponent && CombatComponent->GetCurrentSprayEvaluation(Spray, Stance);
 
+	// 조준선 모양은 플레이어 설정(설정 창에서 바꾸면 다음 프레임부터 반영).
+	const FValorCrosshairSettings& Crosshair = UValorUserSettings::Get().GetCrosshair();
+	const FLinearColor CrosshairColor = FLinearColor::FromSRGBColor(Crosshair.Color);
+
 	if (bLocalDead)
 	{
 		DrawDeathOverlay(CenterX, CenterY, TextUIScale);
@@ -113,32 +118,22 @@ void AValorHUD::DrawHUD()
 	{
 		// ADS: 조준경 점만 표시. 카메라가 반동을 따라가므로(CameraRecoilFollowRatio=1) 이 점이 곧 탄이 향하는 곳이다.
 		const float DotSize = ADSDotSize * UIScale;
-		if (bShowOutline)
+		if (Crosshair.bOutlines)
 		{
-			const float Outline = OutlineThickness * UIScale;
-			DrawRect2D(FLinearColor::Black, CenterX - (DotSize * 0.5f) - Outline, CenterY - (DotSize * 0.5f) - Outline, DotSize + (Outline * 2.0f), DotSize + (Outline * 2.0f), OutlineOpacity);
+			const float Outline = Crosshair.OutlineThickness * UIScale;
+			DrawRect2D(FLinearColor::Black, CenterX - (DotSize * 0.5f) - Outline, CenterY - (DotSize * 0.5f) - Outline, DotSize + (Outline * 2.0f), DotSize + (Outline * 2.0f), Crosshair.OutlineOpacity);
 		}
 
 		DrawRect2D(CrosshairColor, CenterX - (DotSize * 0.5f), CenterY - (DotSize * 0.5f), DotSize, DotSize, 1.0f);
 	}
 	else
 	{
-		// 발로란트 크로스헤어 옵션과 같은 의미로 벌린다.
-		//  - Firing Error: 연사로 늘어난 탄퍼짐(완전 회복 상태 대비 증가분).
-		//  - Movement Error: 이동/점프로 늘어난 탄퍼짐.
+		// 선은 탄퍼짐만큼 벌어진다(DrawCrosshair 설명).
 		// 반동(탄이 위로 올라가는 양)은 선으로 표시하지 않는다 — 발로란트도 힙파이어 반동은 탄착/트레이서로만 보인다.
 		const float FiringErrorPixels = bHasWeapon ? AngleToPixels(FMath::Max(0.0f, Spray.SprayErrorDegrees - Spray.RestErrorDegrees), FocalLengthPixels) * ErrorDisplayMultiplier : 0.0f;
 		const float MovementErrorPixels = bHasWeapon ? AngleToPixels(Spray.MovementErrorDegrees, FocalLengthPixels) * ErrorDisplayMultiplier : 0.0f;
 
-		const float InnerOffset = (InnerLineOffset * UIScale)
-			+ (bInnerShowFiringError ? FiringErrorPixels : 0.0f)
-			+ (bInnerShowMovementError ? MovementErrorPixels : 0.0f);
-		const float OuterOffset = (OuterLineOffset * UIScale)
-			+ (bOuterShowFiringError ? FiringErrorPixels : 0.0f)
-			+ (bOuterShowMovementError ? MovementErrorPixels : 0.0f);
-
-		DrawCrosshairLines(CenterX, CenterY, InnerLineLength * UIScale, InnerLineThickness * UIScale, InnerOffset, InnerLineOpacity);
-		DrawCrosshairLines(CenterX, CenterY, OuterLineLength * UIScale, OuterLineThickness * UIScale, OuterOffset, OuterLineOpacity);
+		DrawCrosshair(Crosshair, CenterX, CenterY, UIScale, FiringErrorPixels, MovementErrorPixels);
 	}
 
 	if (bHasWeapon && CVarValorRecoilDebug.GetValueOnGameThread() > 0)
@@ -175,8 +170,12 @@ void AValorHUD::DrawHUD()
 			DrawCredits(TextUIScale);
 			DrawAbilityBar(CenterX, TextUIScale);
 		}
-		DrawBuyMenu(CenterX, TextUIScale);
-		DrawAgentSelect(CenterX, TextUIScale);
+		// 설정 창이 열려 있으면 그 아래 창(상점·요원 선택)은 그리지 않는다(클릭 영역이 겹치지 않게).
+		if (!IsSettingsMenuOpen())
+		{
+			DrawBuyMenu(CenterX, TextUIScale);
+			DrawAgentSelect(CenterX, TextUIScale);
+		}
 	}
 
 	if (ShouldShowScoreboard())
@@ -184,19 +183,54 @@ void AValorHUD::DrawHUD()
 		DrawScoreboard(CenterX, CenterY, TextUIScale);
 	}
 
+	if (IsSettingsMenuOpen())
+	{
+		DrawSettingsMenu(TextUIScale);
+	}
+	else
+	{
+		ActiveSettingsSlider = NAME_None;
+	}
+
 	// 섬광 눈부심은 모든 HUD 위에 덮는다(맨 마지막).
 	DrawFlashOverlay();
 }
 
-void AValorHUD::DrawCrosshairLines(float CenterX, float CenterY, float Length, float Thickness, float Offset, float Opacity)
+void AValorHUD::DrawCrosshair(const FValorCrosshairSettings& Crosshair, float CenterX, float CenterY, float Scale, float FiringErrorPixels, float MovementErrorPixels)
 {
-	if (Length <= 0.0f || Thickness <= 0.0f || Opacity <= 0.0f)
+	// 발로란트 크로스헤어 옵션과 같은 의미로 벌린다.
+	//  - Firing Error: 연사로 늘어난 탄퍼짐(완전 회복 상태 대비 증가분).
+	//  - Movement Error: 이동/점프로 늘어난 탄퍼짐.
+	for (const FValorCrosshairLineSettings* Lines : {&Crosshair.Inner, &Crosshair.Outer})
+	{
+		const float ExtraOffset = (Lines->bFiringError ? FiringErrorPixels : 0.0f) + (Lines->bMovementError ? MovementErrorPixels : 0.0f);
+		DrawCrosshairLines(Crosshair, *Lines, CenterX, CenterY, Scale, ExtraOffset);
+	}
+
+	if (Crosshair.bCenterDot && Crosshair.CenterDotOpacity > 0.0f)
+	{
+		const float DotSize = FMath::Max(1.0f, Crosshair.CenterDotThickness * Scale);
+		if (Crosshair.bOutlines)
+		{
+			const float Outline = Crosshair.OutlineThickness * Scale;
+			DrawRect2D(FLinearColor::Black, CenterX - (DotSize * 0.5f) - Outline, CenterY - (DotSize * 0.5f) - Outline, DotSize + (Outline * 2.0f), DotSize + (Outline * 2.0f), Crosshair.OutlineOpacity * Crosshair.CenterDotOpacity);
+		}
+		DrawRect2D(FLinearColor::FromSRGBColor(Crosshair.Color), CenterX - (DotSize * 0.5f), CenterY - (DotSize * 0.5f), DotSize, DotSize, Crosshair.CenterDotOpacity);
+	}
+}
+
+void AValorHUD::DrawCrosshairLines(const FValorCrosshairSettings& Crosshair, const FValorCrosshairLineSettings& Lines, float CenterX, float CenterY, float Scale, float ExtraOffset)
+{
+	const float Length = Lines.Length * Scale;
+	const float Thickness = Lines.Thickness * Scale;
+	const float Offset = (Lines.Offset * Scale) + ExtraOffset;
+	if (!Lines.bShow || Length <= 0.0f || Thickness <= 0.0f || Lines.Opacity <= 0.0f)
 	{
 		return;
 	}
 
 	const float HalfThickness = Thickness * 0.5f;
-	const FCrosshairRect Lines[] =
+	const FCrosshairRect Rects[] =
 	{
 		{CenterX - HalfThickness, CenterY - Offset - Length, Thickness, Length},
 		{CenterX - HalfThickness, CenterY + Offset, Thickness, Length},
@@ -204,18 +238,19 @@ void AValorHUD::DrawCrosshairLines(float CenterX, float CenterY, float Length, f
 		{CenterX + Offset, CenterY - HalfThickness, Length, Thickness},
 	};
 
-	if (bShowOutline && OutlineThickness > 0.0f)
+	if (Crosshair.bOutlines && Crosshair.OutlineThickness > 0.0f)
 	{
-		const float Outline = OutlineThickness * (Canvas->ClipY / 1080.0f);
-		for (const FCrosshairRect& Line : Lines)
+		const float Outline = Crosshair.OutlineThickness * Scale;
+		for (const FCrosshairRect& Rect : Rects)
 		{
-			DrawRect2D(FLinearColor::Black, Line.X - Outline, Line.Y - Outline, Line.Width + (Outline * 2.0f), Line.Height + (Outline * 2.0f), OutlineOpacity * Opacity);
+			DrawRect2D(FLinearColor::Black, Rect.X - Outline, Rect.Y - Outline, Rect.Width + (Outline * 2.0f), Rect.Height + (Outline * 2.0f), Crosshair.OutlineOpacity * Lines.Opacity);
 		}
 	}
 
-	for (const FCrosshairRect& Line : Lines)
+	const FLinearColor Color = FLinearColor::FromSRGBColor(Crosshair.Color);
+	for (const FCrosshairRect& Rect : Rects)
 	{
-		DrawRect2D(CrosshairColor, Line.X, Line.Y, Line.Width, Line.Height, Opacity);
+		DrawRect2D(Color, Rect.X, Rect.Y, Rect.Width, Rect.Height, Lines.Opacity);
 	}
 }
 
@@ -327,7 +362,7 @@ void AValorHUD::DrawScopeOverlay(const AValorWeaponBase& Weapon, float CenterX, 
 	DrawRect2D(ScopeReticleColor, CenterX - HalfThickness, CenterY + Gap, Thickness, LineLength, 1.0f);
 
 	const float DotSize = FMath::Max(1.0f, ScopeCenterDotSize * UIScale);
-	DrawRect2D(CrosshairColor, CenterX - (DotSize * 0.5f), CenterY - (DotSize * 0.5f), DotSize, DotSize, 1.0f);
+	DrawRect2D(FLinearColor::FromSRGBColor(UValorUserSettings::Get().GetCrosshair().Color), CenterX - (DotSize * 0.5f), CenterY - (DotSize * 0.5f), DotSize, DotSize, 1.0f);
 }
 
 float AValorHUD::DrawShadowedText(const FString& Text, const FLinearColor& Color, float X, float Y, UFont* Font, float Scale, float AlignX)
@@ -813,7 +848,7 @@ namespace ValorMatchHUD
 bool AValorHUD::ShouldShowScoreboard() const
 {
 	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
-	if (!ValorController || ValorController->IsBuyMenuOpen() || ValorController->IsAgentSelectOpen())
+	if (!ValorController || ValorController->IsBuyMenuOpen() || ValorController->IsAgentSelectOpen() || ValorController->IsSettingsOpen())
 	{
 		return false;
 	}
@@ -1263,6 +1298,14 @@ void AValorHUD::NotifyHitBoxClick(FName BoxName)
 	Super::NotifyHitBoxClick(BoxName);
 
 	AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+
+	// 설정 창이 열려 있으면 클릭은 설정 창에만 간다(아래 창은 그리지도 않는다).
+	if (ValorController && ValorController->IsSettingsOpen())
+	{
+		HandleSettingsHitBox(BoxName.ToString());
+		return;
+	}
+
 	const AValorGameState* ValorGameState = GetWorld() ? GetWorld()->GetGameState<AValorGameState>() : nullptr;
 	const AValorPlayerState* ValorPlayerState = PlayerOwner ? PlayerOwner->GetPlayerState<AValorPlayerState>() : nullptr;
 	if (!ValorController || !ValorGameState || !ValorPlayerState)

@@ -128,6 +128,7 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 	PreviousWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_PreviousWeapon"));
 	DropWeaponAction = FindOrCreateBooleanAction(Outer, TEXT("IA_DropWeapon"));
 	BuyMenuAction = FindOrCreateBooleanAction(Outer, TEXT("IA_BuyMenu"));
+	MenuAction = FindOrCreateBooleanAction(Outer, TEXT("IA_Menu"));
 	UseSpikeAction = FindOrCreateBooleanAction(Outer, TEXT("IA_UseSpike"));
 	AbilityActions = {
 		FindOrCreateBooleanAction(Outer, TEXT("IA_Ability1")),
@@ -147,6 +148,8 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 		WeaponSlotMappingContext->MapKey(PreviousWeaponAction, EKeys::MouseScrollUp);
 		WeaponSlotMappingContext->MapKey(DropWeaponAction, EKeys::G);
 		WeaponSlotMappingContext->MapKey(BuyMenuAction, EKeys::B);
+		WeaponSlotMappingContext->MapKey(MenuAction, EKeys::Escape);
+		WeaponSlotMappingContext->MapKey(MenuAction, EKeys::F10);
 		WeaponSlotMappingContext->MapKey(UseSpikeAction, EKeys::Four);
 		WeaponSlotMappingContext->MapKey(AbilityActions[0], EKeys::C);
 		WeaponSlotMappingContext->MapKey(AbilityActions[1], EKeys::Q);
@@ -167,6 +170,7 @@ void UValorInputRouterComponent::SetupWeaponSlotInput(UEnhancedInputComponent* E
 	EnhancedInputComponent->BindAction(PreviousWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandlePreviousWeaponStarted);
 	EnhancedInputComponent->BindAction(DropWeaponAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleDropWeaponStarted);
 	EnhancedInputComponent->BindAction(BuyMenuAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleBuyMenuStarted);
+	EnhancedInputComponent->BindAction(MenuAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleMenuStarted);
 	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Started, this, &UValorInputRouterComponent::HandleUseSpikeStarted);
 	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Completed, this, &UValorInputRouterComponent::HandleUseSpikeCompleted);
 	EnhancedInputComponent->BindAction(UseSpikeAction, ETriggerEvent::Canceled, this, &UValorInputRouterComponent::HandleUseSpikeCompleted);
@@ -346,6 +350,15 @@ void UValorInputRouterComponent::HandleBuyMenuStarted(const FInputActionValue& V
 	if (AValorPlayerController* PlayerController = OwnerPawn ? Cast<AValorPlayerController>(OwnerPawn->GetController()) : nullptr)
 	{
 		PlayerController->ToggleBuyMenu();
+	}
+}
+
+void UValorInputRouterComponent::HandleMenuStarted(const FInputActionValue& Value)
+{
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (AValorPlayerController* PlayerController = OwnerPawn ? Cast<AValorPlayerController>(OwnerPawn->GetController()) : nullptr)
+	{
+		PlayerController->HandleMenuKey();
 	}
 }
 

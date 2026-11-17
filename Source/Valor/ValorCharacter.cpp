@@ -186,9 +186,19 @@ void AValorCharacter::HandleMoveInput(const FVector2D& RawMoveInput)
 
 void AValorCharacter::HandleLookInput(const FVector2D& RawLookInput)
 {
+	// 사람 플레이어 마우스 시점은 컨트롤러가 원시 카운트 × 설정 감도로 돌린다(AValorPlayerController::UpdateRotation).
+	// 이번 프레임에 마우스가 움직였으면 여기서 또 돌리면 두 번 돈다. 마우스가 가만히 있는데 값이 왔으면 게임패드 오른쪽 스틱이다
+	// (IMC_Player가 같은 IA_Look에 묶는다) → 예전처럼 돌린다. 콘솔 Valor.Input.RawMouseLook 0이면 마우스도 예전 경로.
 	if (!Controller)
 	{
 		return;
+	}
+	if (const AValorPlayerController* ValorController = Cast<AValorPlayerController>(Controller))
+	{
+		if (AValorPlayerController::UsesRawMouseLook() && ValorController->HasRawMouseMovementThisFrame())
+		{
+			return;
+		}
 	}
 
 	AddControllerYawInput(RawLookInput.X);
@@ -284,9 +294,14 @@ void AValorCharacter::HandleCrouchInputReleased()
 
 void AValorCharacter::HandleFireInputPressed()
 {
-	// 죽은 뒤(라운드제 관전): 왼쪽 클릭 = 다음 아군.
+	// 죽은 뒤(라운드제 관전): 왼쪽 클릭 = 다음 아군. 설정 창이 열려 있으면 클릭은 창에만 쓴다.
 	if (!IsAlive())
 	{
+		if (IsMenuOpen())
+		{
+			return;
+		}
+
 		if (AValorPlayerController* ValorController = Cast<AValorPlayerController>(GetController()))
 		{
 			ValorController->SpectateNext();
@@ -294,8 +309,8 @@ void AValorCharacter::HandleFireInputPressed()
 		return;
 	}
 
-	// 구매 메뉴가 열려 있으면 왼쪽 클릭은 메뉴 칸을 고르는 데만 쓴다(총을 쏘지 않는다).
-	if (CombatComponent && !IsBuyMenuOpen())
+	// 구매 메뉴·설정 창이 열려 있으면 왼쪽 클릭은 메뉴 칸을 고르는 데만 쓴다(총을 쏘지 않는다).
+	if (CombatComponent && !IsMenuOpen())
 	{
 		CombatComponent->HandleFireInputPressed();
 	}
@@ -322,6 +337,11 @@ void AValorCharacter::HandleADSInputPressed()
 	// 죽은 뒤(라운드제 관전): 오른쪽 클릭 = 이전 아군.
 	if (!IsAlive())
 	{
+		if (IsMenuOpen())
+		{
+			return;
+		}
+
 		if (AValorPlayerController* ValorController = Cast<AValorPlayerController>(GetController()))
 		{
 			ValorController->SpectatePrevious();
@@ -329,7 +349,7 @@ void AValorCharacter::HandleADSInputPressed()
 		return;
 	}
 
-	if (CombatComponent && !IsBuyMenuOpen())
+	if (CombatComponent && !IsMenuOpen())
 	{
 		CombatComponent->HandleADSInputPressed();
 	}
@@ -338,7 +358,7 @@ void AValorCharacter::HandleADSInputPressed()
 void AValorCharacter::HandleAbilityInput(uint8 Slot, bool bPressed)
 {
 	// 죽었거나 구매 메뉴가 열려 있으면 쓰지 않는다(사망은 어빌리티 쪽 State.Dead 태그로도 막힌다).
-	if (!AbilitySystemComponent || (bPressed && (!IsAlive() || IsBuyMenuOpen())))
+	if (!AbilitySystemComponent || (bPressed && (!IsAlive() || IsMenuOpen())))
 	{
 		return;
 	}
@@ -411,10 +431,10 @@ bool AValorCharacter::IsRevealedTo(EValorTeam Team) const
 		&& static_cast<float>(GameState->GetServerWorldTimeSeconds()) < RevealEndServerTime;
 }
 
-bool AValorCharacter::IsBuyMenuOpen() const
+bool AValorCharacter::IsMenuOpen() const
 {
 	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(GetController());
-	return ValorController && ValorController->IsBuyMenuOpen();
+	return ValorController && ValorController->IsGameplayMenuOpen();
 }
 
 void AValorCharacter::HandleADSInputReleased()

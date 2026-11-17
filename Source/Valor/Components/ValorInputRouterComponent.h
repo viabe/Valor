@@ -57,6 +57,7 @@ private:
 	void HandlePreviousWeaponStarted(const FInputActionValue& Value);
 	void HandleDropWeaponStarted(const FInputActionValue& Value);
 	void HandleBuyMenuStarted(const FInputActionValue& Value);
+	void HandleMenuStarted(const FInputActionValue& Value);
 	void HandleUseSpikeStarted(const FInputActionValue& Value);
 	void HandleAbility1Started(const FInputActionValue& Value) { HandleAbility(0, true); }
 	void HandleAbility1Completed(const FInputActionValue& Value) { HandleAbility(0, false); }
@@ -94,6 +95,10 @@ private:
 	// 구매 메뉴 열기/닫기(B). 무기 슬롯 키와 같은 런타임 입력 컨텍스트에 둔다.
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> BuyMenuAction;
+
+	// 설정 창 열기/닫기(Esc, 에디터 PIE에서는 Esc가 플레이를 끝내므로 F10도).
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> MenuAction;
 
 	// 스파이크 사용(4 키 홀드: 설치·해체).
 	UPROPERTY(Transient)
