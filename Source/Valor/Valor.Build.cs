@@ -30,5 +30,8 @@ public class Valor : ModuleRules
 
 		// 1인칭 팔 투본 IK(AnimationCore::SolveTwoBoneIK). 엔진 런타임 모듈이다.
 		PrivateDependencyModuleNames.Add("AnimationCore");
+
+		// 메인 메뉴·접속(6-5): 내 IP 표시(Sockets), 주소 붙여넣기(ApplicationCore 클립보드), 기본 맵 경로(EngineSettings).
+		PrivateDependencyModuleNames.AddRange(new string[] { "Sockets", "ApplicationCore", "EngineSettings" });
 	}
 }

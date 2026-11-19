@@ -4,6 +4,7 @@
 #include "Engine/NetSerialization.h"
 #include "GameFramework/PlayerController.h"
 #include "Weapons/Data/ValorWeaponDataAsset.h"
+#include "Session/ValorSessionTypes.h"
 #include "ValorPlayerController.generated.h"
 
 class AValorWeaponBase;
@@ -130,6 +131,46 @@ public:
 
 	// 설정 창이 보고 있는 탭(0 = 조작, 1 = 조준선). HUD가 그리고 바꾼다.
 	int32 SettingsTab = 0;
+
+	// 설정 창의 "나가기"는 두 번 눌러야 한다(실수 방지). 첫 클릭부터 이 시각까지 다시 누르면 나간다(로컬 시각).
+	double LeaveConfirmUntil = -1.0;
+
+	// === 서버 연결 상태(클라) ===
+	// 서버에서 마지막으로 패킷을 받은 뒤 지난 실제 시간(초). 서버에 붙은 클라가 아니면 0.
+	// 서버 프로세스가 갑자기 죽으면 접속을 닫는 신호가 오지 않아 엔진은 시간 초과까지 아무것도 알리지 않는다. HUD가 이 값으로 경고를 띄운다.
+	float GetServerSilenceSeconds() const;
+	// 엔진이 끊김으로 판정하는 시간(초, IpNetDriver ConnectionTimeout). 서버에 붙은 클라가 아니거나 시간 초과가 꺼져 있으면(PIE) 0.
+	float GetServerTimeoutSeconds() const;
+
+	// === 메인 메뉴(ValorMenuGameMode, 혼자) ===
+	// 이름·주소 입력 칸, 방 모드, 확인 메시지. HUD가 그리고 클릭을 넘긴다. 키보드 글자는 InputKey에서 받는다.
+	bool IsInMainMenu() const;
+	EValorMenuField GetMenuFocus() const { return MenuFocus; }
+	const FString& GetMenuNameText() const { return MenuNameText; }
+	const FString& GetMenuAddressText() const { return MenuAddressText; }
+	EValorHostMode GetMenuHostMode() const { return MenuHostMode; }
+	const FString& GetMenuMessage() const { return MenuMessage; }
+
+	void FocusMenuField(EValorMenuField Field);
+	void SetMenuHostMode(EValorHostMode Mode) { MenuHostMode = Mode; }
+	// 개발용: 이 PC에 데디 서버를 띄우고 붙는다 / 끈다.
+	void MenuStartLocalServer();
+	void MenuStopLocalServer();
+	void MenuJoin();
+	void MenuCancelJoin();
+	void MenuQuit();
+	void DismissMenuMessage();
+
+	// 키 입력: 메인 메뉴 입력 칸이 선택돼 있으면 글자를 받고, 메뉴에서 Esc는 설정 창·입력 칸을 닫는다.
+	virtual bool InputKey(const FInputKeyParams& Params) override;
+
+	// ValorMainMenu: 메인 메뉴로(서버에서 나간다). PIE에서 메뉴를 볼 때도 쓴다.
+	UFUNCTION(Exec)
+	void ValorMainMenu();
+
+	// 설정의 이름을 서버에 알린다(접속 URL의 Name은 온라인 서브시스템 별명이 덮어써서 직접 보낸다). 서버가 거르고 중복이면 번호를 붙인다.
+	UFUNCTION(Server, Reliable)
+	void ServerSetProfileName(const FString& DesiredName);
 
 	// 스킬 충전 구매·되팔기(칸 번호 = EValorAbilitySlot).
 	UFUNCTION(Server, Reliable)
@@ -281,6 +322,15 @@ private:
 	bool bBuyMenuOpen = false;
 	bool bAgentSelectOpen = false;
 	bool bSettingsOpen = false;
+
+	// 메인 메뉴 입력 상태.
+	EValorMenuField MenuFocus = EValorMenuField::None;
+	FString MenuNameText;
+	FString MenuAddressText;
+	EValorHostMode MenuHostMode = EValorHostMode::Match;
+	FString MenuMessage;
+	bool HandleMenuTextKey(const FInputKeyParams& Params);
+	void CommitMenuName();
 
 	// 캔버스 HUD 클릭 영역용 커서 모드(구매 메뉴·요원 선택 창·설정 창이 같이 쓴다). 하나라도 열려 있으면 커서를 켠다.
 	void RefreshCursorMode();

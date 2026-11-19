@@ -121,6 +121,10 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Text", meta=(ClampMin="0.3", ClampMax="2.0"))
 	float MinTextUIScale = 0.9f;
 
+	// 서버에서 이만큼(초) 아무것도 오지 않으면 연결 경고를 띄운다(정상 간격은 수십 ms).
+	UPROPERTY(EditDefaultsOnly, Category="Valor|Network", meta=(ClampMin="0.5", ClampMax="10.0"))
+	float ConnectionWarningSeconds = 2.0f;
+
 	// 킬피드 한 줄이 화면에 남아 있는 시간(초).
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Feedback", meta=(ClampMin="0.5"))
 	float KillFeedDuration = 6.0f;
@@ -169,6 +173,8 @@ private:
 	// 정찰로 드러난 적 위치(벽 너머로 보이는 표시)와 섬광 눈부심(화면 전체 흰색).
 	void DrawRevealedEnemies(float UIScale);
 	void DrawFlashOverlay();
+	// 서버 응답이 끊기면(서버가 죽음, 네트워크 문제) 화면 가운데 경고와 끊김까지 남은 시간.
+	void DrawConnectionWarning(float CenterX, float CenterY, float UIScale);
 
 	// 요원 선택 창: 요원 카드(이름·스킬 네 칸), 팀원 선택 상황, LOCK IN 버튼.
 	void DrawAgentSelect(float CenterX, float UIScale);
@@ -177,6 +183,11 @@ private:
 	// 클릭 영역 이름은 "Set_<항목>_<동작>"(예: Set_Sens_Plus, Set_InnerLength_Minus, Set_ADS_Off, Set_Color_3, Set_Tab_1).
 	void DrawSettingsMenu(float UIScale);
 	bool IsSettingsMenuOpen() const;
+
+	// 메인 메뉴(ValorHUDMainMenu.cpp): 제목, 이름, 서버 참가(주소), 로컬 데디 서버(개발용), 접속 중·실패 표시. 설정 창은 위 창을 그대로 쓴다.
+	// 클릭 영역 이름은 "Menu_<동작>"(예: Menu_Field_Name, Menu_Join, Menu_Mode_1, Menu_StartServer, Menu_StopServer, Menu_Cancel, Menu_Ok).
+	void DrawMainMenu(float UIScale);
+	void HandleMainMenuHitBox(const FString& BoxName);
 	bool HandleSettingsHitBox(const FString& BoxName);
 	void UpdateActiveSettingsSlider(float MouseX);
 

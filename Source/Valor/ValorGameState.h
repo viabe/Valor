@@ -109,6 +109,7 @@ public:
 	void SetRoundResult(EValorTeam Winner, EValorRoundEndReason Reason);
 	void SetMatchWinner(EValorTeam Winner);
 	void SetUsesRounds(bool bNewUsesRounds) { bUsesRounds = bNewUsesRounds; }
+	void SetLobbyMinPlayers(int32 NewMinPlayers);
 	void SetFreezeDuringBuyPhase(bool bNewFreeze) { bFreezeDuringBuyPhase = bNewFreeze; }
 	void SetBlockFireDuringBuyPhase(bool bNewBlock) { bBlockFireDuringBuyPhase = bNewBlock; }
 
@@ -125,6 +126,9 @@ public:
 
 	// 이번 단계 남은 시간(초). 시간 제한이 없으면 -1.
 	float GetPhaseTimeRemaining() const;
+
+	// 대기실(데디 서버 ?Lobby=1)이면 시작에 필요한 사람 수, 아니면 0.
+	int32 GetLobbyMinPlayers() const { return LobbyMinPlayers; }
 
 	// 지금 총을 쏠 수 있는가(경기 종료에는 못 쏜다. 구매 단계는 게임 모드 설정에 따름, 기본은 쏠 수 있음). 클라 예측과 서버 검증이 같은 함수를 쓴다.
 	bool IsWeaponFireAllowed() const;
@@ -181,6 +185,9 @@ protected:
 	// 이번 단계가 끝나는 서버 월드 시간. 0 이하면 시간 제한 없음.
 	UPROPERTY(Replicated)
 	float PhaseEndServerTime = 0.0f;
+
+	UPROPERTY(Replicated)
+	int32 LobbyMinPlayers = 0;
 
 	UPROPERTY(Replicated)
 	int32 RoundNumber = 0;

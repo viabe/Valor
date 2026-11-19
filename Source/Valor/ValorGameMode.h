@@ -38,6 +38,7 @@ public:
 	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
 	virtual bool ShouldSpawnAtStartSpot(AController* Player) override;
 	virtual void SetPlayerDefaults(APawn* PlayerPawn) override;
+	virtual void BeginPlay() override;
 
 protected:
 	// 이 처치 뒤 부활까지 시간(초). 음수면 부활하지 않는다(라운드제: 다음 라운드 시작에 다시 스폰).

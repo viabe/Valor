@@ -26,6 +26,7 @@
 #include "AbilitySystem/ValorAgentTypes.h"
 #include "World/ValorSpikeSite.h"
 #include "Settings/ValorUserSettings.h"
+#include "Session/ValorSessionSubsystem.h"
 
 namespace
 {
@@ -86,6 +87,21 @@ void AValorHUD::DrawHUD()
 	// 글자가 있는 HUD는 따로 키운다: 창이 작아도 MinTextUIScale 아래로 줄지 않고, 그 위에 글자 배율을 곱한다.
 	const float TextScaleOverride = CVarValorHUDTextScale.GetValueOnGameThread();
 	const float TextUIScale = FMath::Max(UIScale, MinTextUIScale) * (TextScaleOverride > 0.0f ? TextScaleOverride : TextScale);
+
+	// 메인 메뉴: 게임 HUD(크로스헤어 등) 없이 메뉴와 설정 창만.
+	if (const AValorPlayerController* MenuController = Cast<AValorPlayerController>(PlayerOwner); MenuController && MenuController->IsInMainMenu())
+	{
+		DrawMainMenu(TextUIScale);
+		if (IsSettingsMenuOpen())
+		{
+			DrawSettingsMenu(TextUIScale);
+		}
+		else
+		{
+			ActiveSettingsSlider = NAME_None;
+		}
+		return;
+	}
 
 	// 현재 카메라 수평 FOV로 초점거리(픽셀)를 구한다. ADS 줌 중에는 같은 각도가 화면에서 더 크게 보인다.
 	const float HorizontalFOV = PlayerOwner->PlayerCameraManager ? PlayerOwner->PlayerCameraManager->GetFOVAngle() : 103.0f;
@@ -194,6 +210,36 @@ void AValorHUD::DrawHUD()
 
 	// 섬광 눈부심은 모든 HUD 위에 덮는다(맨 마지막).
 	DrawFlashOverlay();
+
+	// 연결 경고는 섬광보다도 위(눈이 부셔도 읽혀야 한다).
+	DrawConnectionWarning(CenterX, CenterY, TextUIScale);
+}
+
+void AValorHUD::DrawConnectionWarning(float CenterX, float CenterY, float UIScale)
+{
+	const AValorPlayerController* ValorController = Cast<AValorPlayerController>(PlayerOwner);
+	if (!ValorController)
+	{
+		return;
+	}
+	// 정상일 때도 서버 패킷 간격은 수십 ms다. 2초면 확실히 문제(서버가 갑자기 꺼졌거나 네트워크가 끊김).
+	const float Silence = ValorController->GetServerSilenceSeconds();
+	if (Silence < ConnectionWarningSeconds)
+	{
+		return;
+	}
+	const float Timeout = ValorController->GetServerTimeoutSeconds();
+	const FString Detail = Timeout > 0.0f
+		? FString::Printf(TEXT("RETURNING TO MENU IN %d S  |  F10 > LEAVE MATCH TO LEAVE NOW"), FMath::Max(0, FMath::CeilToInt(Timeout - Silence)))
+		: FString::Printf(TEXT("NO RESPONSE FOR %d S  |  F10 > LEAVE MATCH TO LEAVE"), FMath::FloorToInt(Silence));
+
+	const float BoxWidth = 620.0f * UIScale;
+	const float BoxHeight = 74.0f * UIScale;
+	const float Top = CenterY - (Canvas->ClipY * 0.22f);
+	DrawRect2D(FLinearColor(0.45f, 0.05f, 0.05f, 1.0f), CenterX - (BoxWidth * 0.5f), Top, BoxWidth, BoxHeight, 0.85f);
+	DrawShadowedText(TEXT("CONNECTION PROBLEM - NO RESPONSE FROM THE SERVER"), FLinearColor::White, CenterX, Top + (12.0f * UIScale), GEngine->GetSmallFont(), UIScale * 1.2f, 0.5f);
+	DrawShadowedText(Detail, FLinearColor(1.0f, 0.85f, 0.75f, 1.0f),
+		CenterX, Top + (44.0f * UIScale), GEngine->GetSmallFont(), UIScale, 0.5f);
 }
 
 void AValorHUD::DrawCrosshair(const FValorCrosshairSettings& Crosshair, float CenterX, float CenterY, float Scale, float FiringErrorPixels, float MovementErrorPixels)
@@ -1054,6 +1100,19 @@ void AValorHUD::DrawMatchStatus(float CenterX, float UIScale)
 	}
 
 	DrawShadowedText(PhaseText, FLinearColor(0.9f, 0.9f, 0.9f, 1.0f), CenterX, Top + BoxHeight - (22.0f * UIScale), SmallFont, UIScale, 0.5f);
+
+	// 대기실(데디 서버 ?Lobby=1): 사람 수 / 시작에 필요한 수. 다 모이면 위 시간이 카운트다운이 된다.
+	if (ValorGameState->GetRoundPhase() == EValorRoundPhase::WaitingToStart && ValorGameState->GetLobbyMinPlayers() > 0)
+	{
+		int32 Humans = 0;
+		for (const APlayerState* Player : ValorGameState->PlayerArray)
+		{
+			Humans += Player && !Player->IsABot() ? 1 : 0;
+		}
+		const FString LobbyText = FString::Printf(TEXT("LOBBY  |  %d / %d PLAYERS  |  %s"), Humans, ValorGameState->GetLobbyMinPlayers(),
+			TimeRemaining >= 0.0f ? TEXT("MATCH STARTS SOON") : TEXT("WAITING FOR PLAYERS TO JOIN"));
+		DrawShadowedText(LobbyText, FLinearColor(0.95f, 0.9f, 0.6f, 1.0f), CenterX, Top + BoxHeight + (8.0f * UIScale), SmallFont, UIScale, 0.5f);
+	}
 }
 
 void AValorHUD::DrawCredits(float UIScale)
@@ -1303,6 +1362,13 @@ void AValorHUD::NotifyHitBoxClick(FName BoxName)
 	if (ValorController && ValorController->IsSettingsOpen())
 	{
 		HandleSettingsHitBox(BoxName.ToString());
+		return;
+	}
+
+	// 메인 메뉴.
+	if (ValorController && ValorController->IsInMainMenu())
+	{
+		HandleMainMenuHitBox(BoxName.ToString());
 		return;
 	}
 

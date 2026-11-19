@@ -9,6 +9,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
 #include "Engine/PlayerStartPIE.h"
+#include "Engine/NetDriver.h"
 #include "Misc/PackageName.h"
 #include "Player/ValorPlayerController.h"
 #include "Player/ValorPlayerState.h"
@@ -18,6 +19,23 @@
 #include "ValorCharacter.h"
 #include "ValorGameState.h"
 #include "Weapons/ValorWeaponBase.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogValorServer, Log, All);
+
+void AValorGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// 데디 서버가 포트를 열지 못하면(같은 PC에 이미 서버가 떠 있음) 아무도 들어올 수 없는 서버로 남는다.
+	// 엔진 기본값은 다음 포트(7778...)로 조용히 옮기는데, 그러면 클라는 127.0.0.1(7777)로 엉뚱한 서버에 붙는다.
+	// DedicatedServerEngine.ini에서 옮기기를 끄고, 여기서 실패를 크게 남기고 끝낸다.
+	const UWorld* World = GetWorld();
+	if (World && World->GetNetMode() == NM_DedicatedServer && !World->GetNetDriver())
+	{
+		UE_LOG(LogValorServer, Error, TEXT("포트 %d번을 열 수 없어 서버를 끝냅니다. 이 PC에 이미 다른 서버(메뉴의 로컬 서버 포함)가 떠 있는지 확인하세요. 다른 포트는 -port=7778."), World->URL.Port);
+		RequestEngineExit(TEXT("Valor: server port in use"));
+	}
+}
 
 AValorGameMode::AValorGameMode()
 {

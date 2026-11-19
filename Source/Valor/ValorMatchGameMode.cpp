@@ -78,6 +78,12 @@ void AValorMatchGameMode::InitGame(const FString& MapName, const FString& Option
 		}
 	};
 	ReadSeconds(TEXT("PreMatchTime"), PreMatchDelaySeconds);
+	bLobby = UGameplayStatics::HasOption(Options, TEXT("Lobby"));
+	if (UGameplayStatics::HasOption(Options, TEXT("MinPlayers")))
+	{
+		LobbyMinPlayers = FMath::Clamp(UGameplayStatics::GetIntOption(Options, TEXT("MinPlayers"), LobbyMinPlayers), 1, 10);
+	}
+	ReadSeconds(TEXT("LobbyCountdown"), LobbyCountdownSeconds);
 	ReadSeconds(TEXT("BuyTime"), BuyPhaseSeconds);
 	ReadSeconds(TEXT("RoundTime"), RoundSeconds);
 	ReadSeconds(TEXT("RoundEndTime"), RoundEndSeconds);
@@ -97,6 +103,7 @@ void AValorMatchGameMode::InitGameState()
 		ValorGameState->SetBlockFireDuringBuyPhase(bBlockFireDuringBuyPhase);
 		ValorGameState->SetRoundPhase(EValorRoundPhase::WaitingToStart, 0.0f);
 		ValorGameState->SetAgentRoster(AvailableAgents);
+		ValorGameState->SetLobbyMinPlayers(bLobby ? LobbyMinPlayers : 0);
 	}
 }
 
@@ -170,8 +177,10 @@ void AValorMatchGameMode::HandleStartingNewPlayer_Implementation(APlayerControll
 	if (!bMatchScheduled)
 	{
 		bMatchScheduled = true;
-		SetPhase(EValorRoundPhase::WaitingToStart, FMath::Max(PreMatchDelaySeconds, 0.1f));
+		// 대기실이면 시간 없이(0) 기다린다(아래에서 인원이 차면 카운트다운). HUD는 대기실 안내를 보여 준다.
+		SetPhase(EValorRoundPhase::WaitingToStart, bLobby ? 0.0f : FMath::Max(PreMatchDelaySeconds, 0.1f));
 	}
+	UpdateLobbyCountdown();
 
 	// 대기·구매 단계면 바로 팀 스폰에 세우고, 교전 중이면 다음 라운드까지 기다린다(관전).
 	if (CurrentPhase == EValorRoundPhase::WaitingToStart || CurrentPhase == EValorRoundPhase::AgentSelect || CurrentPhase == EValorRoundPhase::BuyPhase)
@@ -204,6 +213,32 @@ void AValorMatchGameMode::Logout(AController* Exiting)
 	if (IsRoundLive())
 	{
 		CheckElimination();
+	}
+
+	// 대기실 인원: 나간 컨트롤러는 다음 프레임에 목록에서 빠지므로 그때 센다.
+	if (IsWaitingInLobby())
+	{
+		GetWorldTimerManager().SetTimerForNextTick(this, &AValorMatchGameMode::UpdateLobbyCountdown);
+	}
+}
+
+void AValorMatchGameMode::UpdateLobbyCountdown()
+{
+	if (!IsWaitingInLobby())
+	{
+		return;
+	}
+	const int32 Humans = GetNumPlayers();
+	const bool bCountingDown = GetWorldTimerManager().IsTimerActive(PhaseTimerHandle);
+	if (Humans >= LobbyMinPlayers && !bCountingDown)
+	{
+		UE_LOG(LogValorMatch, Log, TEXT("대기실: %d/%d명, %.0f초 뒤 시작"), Humans, LobbyMinPlayers, LobbyCountdownSeconds);
+		SetPhase(EValorRoundPhase::WaitingToStart, LobbyCountdownSeconds);
+	}
+	else if (Humans < LobbyMinPlayers && bCountingDown)
+	{
+		UE_LOG(LogValorMatch, Log, TEXT("대기실: %d/%d명으로 줄어 다시 기다림"), Humans, LobbyMinPlayers);
+		SetPhase(EValorRoundPhase::WaitingToStart, 0.0f);
 	}
 }
 

@@ -15,6 +15,14 @@
 #include "GameFramework/PlayerInput.h"
 #include "HAL/IConsoleManager.h"
 #include "Settings/ValorUserSettings.h"
+#include "Session/ValorSessionSubsystem.h"
+#include "ValorMenuGameMode.h"
+#include "GameFramework/GameStateBase.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Engine/NetConnection.h"
+#include "Engine/NetDriver.h"
+#include "HAL/PlatformTime.h"
 
 namespace
 {
@@ -43,6 +51,247 @@ void AValorPlayerController::BeginPlay()
 	FInputModeGameOnly InputMode;
 	SetInputMode(InputMode);
 	bShowMouseCursor = false;
+
+	UValorUserSettings& Settings = UValorUserSettings::Get();
+	if (IsInMainMenu())
+	{
+		// 메뉴: 커서를 켜고 입력 칸을 저장된 값으로 채운다.
+		MenuNameText = Settings.GetPlayerName();
+		MenuAddressText = Settings.GetLastJoinAddress();
+		RefreshCursorMode();
+		return;
+	}
+
+	// 게임: 내 이름을 서버에 알린다(리슨 호스트는 바로 실행된다).
+	ServerSetProfileName(Settings.GetPlayerName());
+}
+
+float AValorPlayerController::GetServerSilenceSeconds() const
+{
+	const UWorld* World = GetWorld();
+	const UNetDriver* NetDriver = World && World->GetNetMode() == NM_Client ? World->GetNetDriver() : nullptr;
+	const UNetConnection* Connection = NetDriver ? NetDriver->ServerConnection : nullptr;
+	if (!Connection || Connection->GetConnectionState() != USOCK_Open)
+	{
+		return 0.0f;
+	}
+	// LastReceiveRealtime은 FPlatformTime::Seconds 기준이다(엔진이 패킷을 받을 때 갱신).
+	return static_cast<float>(FMath::Max(0.0, FPlatformTime::Seconds() - Connection->LastReceiveRealtime));
+}
+
+float AValorPlayerController::GetServerTimeoutSeconds() const
+{
+	const UWorld* World = GetWorld();
+	const UNetDriver* NetDriver = World && World->GetNetMode() == NM_Client ? World->GetNetDriver() : nullptr;
+	// PIE·-NoTimeouts는 엔진이 시간 초과를 끈다(그때는 0: 저절로 끊기지 않음).
+	return NetDriver && !NetDriver->bNoTimeouts ? NetDriver->ConnectionTimeout : 0.0f;
+}
+
+bool AValorPlayerController::IsInMainMenu() const
+{
+	// 메뉴는 언제나 혼자(Standalone)라 게임 모드가 이 컴퓨터에 있다.
+	const UWorld* World = GetWorld();
+	return World && World->GetAuthGameMode<AValorMenuGameMode>() != nullptr;
+}
+
+void AValorPlayerController::ServerSetProfileName_Implementation(const FString& DesiredName)
+{
+	AGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode() : nullptr;
+	AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	const FString Sanitized = ValorSession::SanitizePlayerName(DesiredName);
+	if (!GameMode || !GameState || !PlayerState || Sanitized.IsEmpty())
+	{
+		return;
+	}
+
+	TArray<FString> Taken;
+	for (const APlayerState* Other : GameState->PlayerArray)
+	{
+		if (Other && Other != PlayerState)
+		{
+			Taken.Add(Other->GetPlayerName());
+		}
+	}
+	GameMode->ChangeName(this, ValorSession::MakeUniqueName(Sanitized, Taken), true);
+}
+
+void AValorPlayerController::FocusMenuField(EValorMenuField Field)
+{
+	if (MenuFocus == EValorMenuField::Name && Field != EValorMenuField::Name)
+	{
+		CommitMenuName();
+	}
+	MenuFocus = Field;
+}
+
+void AValorPlayerController::CommitMenuName()
+{
+	UValorUserSettings& Settings = UValorUserSettings::Get();
+	Settings.SetPlayerName(MenuNameText);
+	Settings.Save();
+	MenuNameText = Settings.GetPlayerName();
+}
+
+void AValorPlayerController::MenuStartLocalServer()
+{
+	FocusMenuField(EValorMenuField::None);
+	UValorSessionSubsystem* Session = UValorSessionSubsystem::Get(this);
+	FString Error;
+	if (Session && !Session->StartLocalServer(MenuHostMode, Error))
+	{
+		MenuMessage = Error;
+	}
+	else
+	{
+		MenuMessage.Reset();
+	}
+}
+
+void AValorPlayerController::MenuStopLocalServer()
+{
+	if (UValorSessionSubsystem* Session = UValorSessionSubsystem::Get(this))
+	{
+		Session->CancelJoin();
+		Session->StopLocalServer();
+	}
+}
+
+void AValorPlayerController::MenuJoin()
+{
+	FocusMenuField(EValorMenuField::None);
+	UValorSessionSubsystem* Session = UValorSessionSubsystem::Get(this);
+	if (!Session)
+	{
+		return;
+	}
+	FString Error;
+	if (Session->JoinGame(MenuAddressText, Error))
+	{
+		MenuMessage.Reset();
+		Session->ClearLastError();
+	}
+	else
+	{
+		MenuMessage = Error;
+	}
+}
+
+void AValorPlayerController::MenuCancelJoin()
+{
+	if (UValorSessionSubsystem* Session = UValorSessionSubsystem::Get(this))
+	{
+		Session->CancelJoin();
+	}
+}
+
+void AValorPlayerController::MenuQuit()
+{
+	CommitMenuName();
+	UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false);
+}
+
+void AValorPlayerController::DismissMenuMessage()
+{
+	MenuMessage.Reset();
+	if (UValorSessionSubsystem* Session = UValorSessionSubsystem::Get(this))
+	{
+		Session->ClearLastError();
+	}
+}
+
+bool AValorPlayerController::InputKey(const FInputKeyParams& Params)
+{
+	// 메인 메뉴 키보드: 캐릭터(입력 컴포넌트)가 없으므로 여기서 받는다. 마우스는 그대로 넘겨 클릭 영역이 동작하게 한다.
+	// Shift·Ctrl 같은 보조 키는 엔진이 누름 상태를 기록해야(IsInputKeyDown) 대문자·붙여넣기가 되므로 그대로 넘긴다.
+	if (IsLocalController() && !Params.Key.IsMouseButton() && !Params.Key.IsAnalog() && !Params.Key.IsModifierKey()
+		&& (Params.Event == IE_Pressed || Params.Event == IE_Repeat) && IsInMainMenu())
+	{
+		if (Params.Key == EKeys::Escape || Params.Key == EKeys::F10)
+		{
+			if (bSettingsOpen)
+			{
+				SetSettingsOpen(false);
+			}
+			else
+			{
+				FocusMenuField(EValorMenuField::None);
+			}
+			return true;
+		}
+		if (!bSettingsOpen && MenuFocus != EValorMenuField::None && HandleMenuTextKey(Params))
+		{
+			return true;
+		}
+	}
+	return Super::InputKey(Params);
+}
+
+bool AValorPlayerController::HandleMenuTextKey(const FInputKeyParams& Params)
+{
+	const bool bNameField = MenuFocus == EValorMenuField::Name;
+	FString& Text = bNameField ? MenuNameText : MenuAddressText;
+	const int32 MaxLength = bNameField ? ValorSession::MaxNameLength : ValorSession::MaxAddressLength;
+	auto IsAllowed = [bNameField](TCHAR Typed)
+	{
+		return bNameField ? ValorSession::IsAllowedNameChar(Typed) : ValorSession::IsAllowedAddressChar(Typed);
+	};
+
+	if (Params.Key == EKeys::BackSpace)
+	{
+		Text.LeftChopInline(1);
+		return true;
+	}
+	if (Params.Key == EKeys::Enter)
+	{
+		if (bNameField)
+		{
+			FocusMenuField(EValorMenuField::None);
+		}
+		else
+		{
+			MenuJoin();
+		}
+		return true;
+	}
+	if (Params.Key == EKeys::Tab)
+	{
+		FocusMenuField(bNameField ? EValorMenuField::Address : EValorMenuField::Name);
+		return true;
+	}
+
+	const bool bControl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+	if (bControl && Params.Key == EKeys::V)
+	{
+		// 붙여넣기(주소를 메신저에서 복사해 올 때). 칸에 맞지 않는 글자는 버린다.
+		FString Clipboard;
+		FPlatformApplicationMisc::ClipboardPaste(Clipboard);
+		for (const TCHAR Typed : Clipboard.TrimStartAndEnd())
+		{
+			if (IsAllowed(Typed) && Text.Len() < MaxLength)
+			{
+				Text.AppendChar(Typed);
+			}
+		}
+		return true;
+	}
+
+	const bool bShift = IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);
+	const TCHAR Typed = bControl ? 0 : ValorSession::KeyToChar(Params.Key, bShift);
+	if (Typed != 0 && IsAllowed(Typed) && Text.Len() < MaxLength)
+	{
+		Text.AppendChar(Typed);
+	}
+
+	// 입력 칸이 선택된 동안은 글자가 아닌 키(방향키 등)도 게임으로 넘기지 않는다.
+	return true;
+}
+
+void AValorPlayerController::ValorMainMenu()
+{
+	if (UValorSessionSubsystem* Session = UValorSessionSubsystem::Get(this))
+	{
+		Session->ReturnToMainMenu();
+	}
 }
 
 void AValorPlayerController::AcknowledgePossession(APawn* InPawn)
@@ -185,7 +434,7 @@ void AValorPlayerController::SetSettingsOpen(bool bOpen)
 
 void AValorPlayerController::RefreshCursorMode()
 {
-	ApplyCursorMode(bBuyMenuOpen || bAgentSelectOpen || bSettingsOpen);
+	ApplyCursorMode(bBuyMenuOpen || bAgentSelectOpen || bSettingsOpen || IsInMainMenu());
 }
 
 void AValorPlayerController::UpdateRotation(float DeltaTime)

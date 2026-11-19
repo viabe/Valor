@@ -13,6 +13,7 @@
 #include "InputCoreTypes.h"
 #include "Player/ValorPlayerController.h"
 #include "Settings/ValorUserSettings.h"
+#include "Session/ValorSessionSubsystem.h"
 
 namespace ValorSettingsMenu
 {
@@ -251,6 +252,25 @@ bool AValorHUD::HandleSettingsHitBox(const FString& BoxName)
 		ValorController->SetSettingsOpen(false);
 		return true;
 	}
+	if (Target == TEXT("Leave"))
+	{
+		// 두 번 눌러야 나간다(첫 번째는 3초 동안 "CONFIRM LEAVE"로 바뀐다).
+		const double Now = GetWorld() ? GetWorld()->GetRealTimeSeconds() : 0.0;
+		if (Now <= ValorController->LeaveConfirmUntil)
+		{
+			ValorController->LeaveConfirmUntil = -1.0;
+			if (UValorSessionSubsystem* Session = UValorSessionSubsystem::Get(this))
+			{
+				Session->ReturnToMainMenu();
+			}
+		}
+		else
+		{
+			ValorController->LeaveConfirmUntil = Now + 3.0;
+		}
+		return true;
+	}
+
 	if (Target == TEXT("Reset"))
 	{
 		// 보고 있는 탭만 기본값으로.
@@ -388,9 +408,27 @@ void AValorHUD::DrawSettingsMenu(float RequestedScale)
 	{
 		DrawButton(PanelX + Margin + (TabIndex * (TabWidth + (10.0f * S))), TabY, TabWidth, TabHeight, TabNames[TabIndex], TabIndex == Tab, FName(*FString::Printf(TEXT("Set_Tab_%d"), TabIndex)));
 	}
+	// 오른쪽 위 버튼: 닫기, 탭 초기화, (게임 중) 나가기. 오른쪽부터 채운다.
 	const float TopButtonWidth = 150.0f * S;
-	DrawButton(PanelX + PanelWidth - Margin - TopButtonWidth, TabY, TopButtonWidth, TabHeight, TEXT("CLOSE"), false, TEXT("Set_Close"));
-	DrawButton(PanelX + PanelWidth - Margin - (TopButtonWidth * 2.0f) - (10.0f * S), TabY, TopButtonWidth, TabHeight, TEXT("RESET TAB"), false, TEXT("Set_Reset"));
+	float ButtonRight = PanelX + PanelWidth - Margin;
+	auto DrawTopButton = [&](const FString& Text, bool bHighlight, FName HitBox)
+	{
+		DrawButton(ButtonRight - TopButtonWidth, TabY, TopButtonWidth, TabHeight, Text, bHighlight, HitBox);
+		ButtonRight -= TopButtonWidth + (10.0f * S);
+	};
+	DrawTopButton(TEXT("CLOSE"), false, TEXT("Set_Close"));
+	DrawTopButton(TEXT("RESET TAB"), false, TEXT("Set_Reset"));
+	if (!ValorController->IsInMainMenu())
+	{
+		const bool bConfirming = GetWorld() && GetWorld()->GetRealTimeSeconds() <= ValorController->LeaveConfirmUntil;
+		if (bConfirming)
+		{
+			// 확인 단계는 빨간 바탕으로 눈에 띄게.
+			const float X = ButtonRight - TopButtonWidth;
+			DrawRect2D(FLinearColor(0.55f, 0.05f, 0.05f, 1.0f), X - (2.0f * S), TabY - (2.0f * S), TopButtonWidth + (4.0f * S), TabHeight + (4.0f * S), 1.0f);
+		}
+		DrawTopButton(bConfirming ? TEXT("CONFIRM LEAVE") : TEXT("LEAVE MATCH"), false, TEXT("Set_Leave"));
+	}
 
 	const float ContentX = PanelX + Margin;
 	const float ContentWidth = PanelWidth - (Margin * 2.0f);

@@ -37,6 +37,12 @@ public:
 	void ResetControls();
 	void ResetCrosshair();
 
+	// 메인 메뉴: 이름(점수판·킬피드에 보이는 이름)과 마지막으로 참가한 주소. 이름이 비어 있으면 Player#### 를 만들어 저장한다.
+	FString GetPlayerName();
+	void SetPlayerName(const FString& NewName);
+	const FString& GetLastJoinAddress() const { return LastJoinAddress; }
+	void SetLastJoinAddress(const FString& Address) { LastJoinAddress = Address; }
+
 	// 저장 파일 경로(로그·문서·도구 확인용).
 	static FString GetSaveFilePath();
 
@@ -46,4 +52,10 @@ private:
 
 	UPROPERTY(config)
 	FValorCrosshairSettings Crosshair;
+
+	UPROPERTY(config)
+	FString PlayerName;
+
+	UPROPERTY(config)
+	FString LastJoinAddress = TEXT("127.0.0.1");
 };

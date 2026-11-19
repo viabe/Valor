@@ -15,7 +15,7 @@
 ### PIE 테스트 방법
 
 1. 맵 World Settings → GameMode Override를 `ValorMatchGameMode`로 바꾼다(저장하지 않으면 맵은 그대로).
-2. Play 옆 ⋮ → Number of Players를 2(서로 다른 팀) 또는 3(TeamA 2명: 아군 사격 확인), Net Mode를 Play As Listen Server로 둔다.
+2. Play 옆 ⋮ → Net Mode를 Play As Client로 둔다(에디터 안에서 데디 서버 + 클라, 이 프로젝트 기준). Number of Players는 2(서로 다른 팀) 또는 3(TeamA 2명: 아군 사격 확인). 메뉴·서버 참가는 Menu.md.
 3. 개발용 콘솔 명령(` 키):
 
 | 명령 | 효과 |
@@ -26,7 +26,8 @@
 | `ValorKillMe` | 내 캐릭터를 즉사시킨다(관전 확인용) |
 | `ValorTagMe [간격초\|off] [세기%]` | 서버가 일정 간격으로 내 캐릭터에 피격 감속을 건다(피해 없음, 기본 1.5초마다 72.5%). 크로스헤어 아래 `SLOWED`·`CORRECTIONS` 표시(Weapons.md 피격 감속) |
 | `Valor.HUD.TextScale 1.6` | HUD 글자·패널 배율(0이면 기본 1.4) |
-| `F10`(PIE) / `Esc` | 설정 창: 감도·조준 방식·조준선(Settings.md). 콘솔 `ValorSens 0.4` 등 |
+| `F10`(PIE) / `Esc` | 설정 창: 감도·조준 방식·조준선(Settings.md). 콘솔 `ValorSens 0.4` 등. 게임 중에는 LEAVE MATCH |
+| `ValorMainMenu` | 메인 메뉴로(서버에서 나간다). 메뉴에서 서버 주소로 참가, 로컬 데디 서버 띄우기(Menu.md) |
 
 | 확인할 것 | 방법 |
 |---|---|

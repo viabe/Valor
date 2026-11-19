@@ -52,6 +52,7 @@ void AValorGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AValorGameState, bBlockFireDuringBuyPhase);
 	DOREPLIFETIME(AValorGameState, RoundPhase);
 	DOREPLIFETIME(AValorGameState, PhaseEndServerTime);
+	DOREPLIFETIME(AValorGameState, LobbyMinPlayers);
 	DOREPLIFETIME(AValorGameState, RoundNumber);
 	DOREPLIFETIME(AValorGameState, AttackingTeam);
 	DOREPLIFETIME(AValorGameState, ScoreA);
@@ -112,6 +113,15 @@ void AValorGameState::SetRoundPhase(EValorRoundPhase NewPhase, float DurationSec
 	// GameState는 초당 10번 복제(AInfo 기본)라 단계 전환이 클라에 최대 0.1초 늦게 닿는다. 이동 고정·사격 허용을 클라도 이 값으로 예측하므로
 	// 바뀐 틱에 바로 보낸다(늦으면 그 사이 움직임이 서버 보정으로 되돌려진다).
 	ForceNetUpdate();
+}
+
+void AValorGameState::SetLobbyMinPlayers(int32 NewMinPlayers)
+{
+	if (HasAuthority())
+	{
+		LobbyMinPlayers = NewMinPlayers;
+		ForceNetUpdate();
+	}
 }
 
 void AValorGameState::SetRoundNumber(int32 NewRoundNumber, EValorTeam NewAttackingTeam)

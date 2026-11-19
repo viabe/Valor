@@ -51,6 +51,10 @@ public:
 	// 개발용: 궁극기 포인트를 정한다.
 	void DebugSetUltimatePoints(AController* Target, int32 Points);
 
+	// 대기실(?Lobby=1, 데디 서버): 시간 제한 없이 기다리다 사람이 MinPlayers명 모이면 카운트다운(LobbyCountdown초) 뒤 시작.
+	//   카운트다운 중에 인원이 줄면 다시 기다린다. 방장이 없으므로 서버 규칙으로 시작한다(개발 중에는 ValorSkipPhase로 바로 시작).
+	bool IsWaitingInLobby() const { return bLobby && CurrentPhase == EValorRoundPhase::WaitingToStart; }
+
 	// 요원 선택 단계(서버). 고르기는 같은 팀이 확정한 요원이면 거부, 확정은 고른 요원이 있어야 한다.
 	bool TrySelectAgent(AController* Player, TSubclassOf<class UValorAgentDefinition> AgentClass);
 	bool TryLockAgent(AController* Player);
@@ -82,6 +86,14 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Timing", meta=(ClampMin="0.0"))
 	float PreMatchDelaySeconds = 3.0f;
+
+	// ?Lobby=1이면 대기 단계에 시간을 걸지 않고 인원을 기다린다. ?MinPlayers=, ?LobbyCountdown=으로 바꾼다.
+	bool bLobby = false;
+	int32 LobbyMinPlayers = 2;
+	float LobbyCountdownSeconds = 10.0f;
+
+	// 사람 수가 바뀔 때(접속·나감) 카운트다운을 걸거나 푼다.
+	void UpdateLobbyCountdown();
 
 	UPROPERTY(EditDefaultsOnly, Category="Valor|Match|Timing", meta=(ClampMin="1.0"))
 	float BuyPhaseSeconds = 30.0f;
